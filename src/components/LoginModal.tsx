@@ -18,11 +18,11 @@ import PhonelinkLockOutlinedIcon from "@mui/icons-material/PhonelinkLockOutlined
 import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
 import PersonOutlinedIcon from "@mui/icons-material/PersonOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { signerManager } from "../signer";
 import { generateSecretKey } from "nostr-tools";
 import { isNativePlatform, isCapacitor } from "../signer/secureStorage";
-import { AMBER_PACKAGE } from "../signer/NIP55Signer";
+import type { AppInfo as SignerAppInfo } from "nostr-signer-capacitor-plugin";
 import FormstrLogo from "../assets/formstr-pages-logo.png";
 
 export default function LoginModal({
@@ -38,6 +38,17 @@ export default function LoginModal({
   const [uri, setUri] = useState("");
   const [nsec, setNsec] = useState("");
   const [error, setError] = useState<string>("");
+  const [installedSigners, setInstalledSigners] = useState<SignerAppInfo[]>([]);
+
+  useEffect(() => {
+    if (!isCapacitor) return;
+    const loadSigners = async () => {
+      const { NostrSignerPlugin } = await import("nostr-signer-capacitor-plugin");
+      const { apps } = await NostrSignerPlugin.getInstalledSignerApps();
+      setInstalledSigners(apps);
+    };
+    loadSigners();
+  }, []);
 
   const handleNip07 = async () => {
     setError("");
@@ -60,13 +71,13 @@ export default function LoginModal({
     }
   };
 
-  const handleAmber = async () => {
+  const handleNip55 = async (packageName: string) => {
     setError("");
     try {
-      await signerManager.loginWithNip55(AMBER_PACKAGE);
+      await signerManager.loginWithNip55(packageName);
       onClose();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Amber sign-in failed");
+      setError(e instanceof Error ? e.message : "Signer sign-in failed");
     }
   };
 
@@ -202,17 +213,22 @@ export default function LoginModal({
             </Box>
           )}
 
-          {/* Amber / NIP-55 — Capacitor (Android) only */}
-          {isCapacitor && (
+          {/* NIP-55 external signers — Capacitor (Android) only */}
+          {isCapacitor && installedSigners.map((signer) => (
             <OptionButton
-              icon={<PhonelinkLockOutlinedIcon />}
-              title="Amber"
+              key={signer.packageName}
+              icon={
+                signer.iconUrl
+                  ? <img src={signer.iconUrl} alt={signer.name} style={{ width: 24, height: 24, borderRadius: 4 }} />
+                  : <PhonelinkLockOutlinedIcon />
+              }
+              title={signer.name}
               description="Sign with external Android signer"
               accentColor={theme.palette.secondary.main}
               accentAlpha={accentAlpha}
-              onClick={handleAmber}
+              onClick={() => handleNip55(signer.packageName)}
             />
-          )}
+          ))}
 
           {/* NIP-46 */}
           <Box>

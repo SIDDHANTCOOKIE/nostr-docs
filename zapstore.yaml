@@ -1,6 +1,8 @@
 repository: https://github.com/formstr-hq/nostr-docs
 name: Pages by Form*
+description: Your notes aren’t just text — they’re your thoughts at 2AM, your plans for the future, your half-formed ideas that might become something real. Why should anyone else have access to that?
 summary: Your notes aren’t just text — they’re your thoughts at 2AM, your plans for the future, your half-formed ideas that might become something real. Why should anyone else have access to that?
+release_notes: ./CHANGELOG.md
 tags:
   - Pages
   - Form*

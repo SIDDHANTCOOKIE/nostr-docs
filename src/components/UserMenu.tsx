@@ -44,7 +44,7 @@ export default function UserMenu({ themeId, onSelectTheme }: Props) {
     ? user.name || user.pubkey?.slice(0, 6) + "..."
     : null;
   const avatarLetter = user
-    ? user.name?.[0].toUpperCase() || user.pubkey?.slice(0, 2).toUpperCase()
+    ? user.name?.[0]?.toUpperCase() || user.pubkey?.slice(0, 2)?.toUpperCase()
     : undefined;
 
   return (
