@@ -241,7 +241,14 @@ export function DocumentEditorController({
     setMd(content);
     lastSavedMdRef.current = content;
     if (editor) {
+      const { from, to } = editor.state.selection;
       editor.commands.setContent(content, { emitUpdate: false });
+      // Restore cursor, clamped to new doc length in case content shrank
+      const docSize = editor.state.doc.content.size;
+      editor.commands.setTextSelection({
+        from: Math.min(from, docSize),
+        to: Math.min(to, docSize),
+      });
       setWordCount(editor.storage.characterCount.words());
       setCharCount(editor.storage.characterCount.characters());
     }
