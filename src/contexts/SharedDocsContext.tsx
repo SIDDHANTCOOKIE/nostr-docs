@@ -8,6 +8,7 @@ import React, {
 import { fetchEventsByKind } from "../nostr/fetchFile";
 import { useRelays } from "./RelayContext";
 import { useUser } from "./UserContext";
+import { useDocumentContext } from "./DocumentContext";
 import { signerManager } from "../signer";
 import {
   getPublicKey,
@@ -48,6 +49,7 @@ export const SharedPagesProvider: React.FC<{ children: React.ReactNode }> = ({
 }) => {
   const { relays } = useRelays();
   const { user } = useUser();
+  const { addDocument } = useDocumentContext();
   const [sharedDocs, setSharedDocs] = useState<string[][]>([]);
   const [loading, setLoading] = useState(true);
   const [sharedDocuments, setSharedDocuments] = useState<
@@ -61,7 +63,7 @@ export const SharedPagesProvider: React.FC<{ children: React.ReactNode }> = ({
     return keys?.slice(1) || [];
   };
 
-  const fetchSharedDocuments = (sharedDocs: string[][]) => {
+  const fetchSharedDocuments = (sharedDocs: string[][], currentUserPubkey?: string) => {
     // Close any existing subscription before creating a new one
     if (subscriptionRef.current) {
       subscriptionRef.current.close();
@@ -118,6 +120,14 @@ export const SharedPagesProvider: React.FC<{ children: React.ReactNode }> = ({
         } catch {
           return;
         }
+
+        // If this is the user's own doc re-encrypted with a viewKey, add it to
+        // the personal list so it doesn't silently disappear from "My Pages".
+        if (event.pubkey === currentUserPubkey) {
+          addDocument(event, { viewKey: keys[1] });
+          return;
+        }
+
         setSharedDocuments((prev) => {
           const next = new Map(prev);
           const history = next.get(address) ?? {
@@ -186,7 +196,7 @@ export const SharedPagesProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       setSharedDocs(parsed);
-      fetchSharedDocuments(parsed);
+      fetchSharedDocuments(parsed, pubkey);
     } catch (err) {
       console.error("Failed to fetch shared pages:", err);
     } finally {
@@ -245,7 +255,7 @@ export const SharedPagesProvider: React.FC<{ children: React.ReactNode }> = ({
 
     // update state and subscribe to newly added document
     setSharedDocs(updatedDocs);
-    fetchSharedDocuments(updatedDocs);
+    fetchSharedDocuments(updatedDocs, pubkey);
   };
 
   return (
