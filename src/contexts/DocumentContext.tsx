@@ -35,6 +35,11 @@ interface DocumentContextValue {
   visibleDocuments: Map<string, DocumentHistory>;
   /** Docs opened by the user but authored by someone else (not deleted). */
   visitedDocuments: Map<string, DocumentHistory>;
+
+  /** Addresses of documents the user has explicitly set to device-only. */
+  localOnlyAddresses: Set<string>;
+  /** Update the in-memory device-only flag for a document address. */
+  markLocalOnly: (address: string, localOnly: boolean) => void;
 }
 
 const DocumentContext = createContext<DocumentContextValue | undefined>(
@@ -86,6 +91,18 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
   const [deletedEventIds, setDeletedEventIds] = useState<Set<string>>(
     new Set(),
   );
+  const [localOnlyAddresses, setLocalOnlyAddresses] = useState<Set<string>>(
+    new Set(),
+  );
+
+  const markLocalOnly = (address: string, localOnly: boolean) => {
+    setLocalOnlyAddresses((prev) => {
+      const next = new Set(prev);
+      if (localOnly) next.add(address);
+      else next.delete(address);
+      return next;
+    });
+  };
   const addDeletionRequest = (delEvent: Event) => {
     const eTags = delEvent.tags.filter((t) => t[0] === "e").map((t) => t[1]);
     const aTags = delEvent.tags.filter((t) => t[0] === "a").map((t) => t[1]);
@@ -202,6 +219,8 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
         clearDeletionRecord,
         visibleDocuments,
         visitedDocuments,
+        localOnlyAddresses,
+        markLocalOnly,
       }}
     >
       {children}

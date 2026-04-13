@@ -19,6 +19,8 @@ import EditNoteIcon from "@mui/icons-material/EditNote";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import DeleteIcon from "@mui/icons-material/Delete";
 import ShareIcon from "@mui/icons-material/Share";
+import CloudOffIcon from "@mui/icons-material/CloudOff";
+import SmartphoneIcon from "@mui/icons-material/Smartphone";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import FormatBoldIcon from "@mui/icons-material/FormatBold";
@@ -59,6 +61,9 @@ type Props = {
   isViewOnly: boolean;
   onAttachFile?: (files: FileList) => void;
   uploading?: boolean;
+  isLocalOnly?: boolean;
+  onToggleLocalOnly?: () => void;
+  showLocalOnlyToggle?: boolean;
 };
 
 export function EditorToolbar({
@@ -76,6 +81,9 @@ export function EditorToolbar({
   isViewOnly,
   onAttachFile,
   uploading,
+  isLocalOnly = false,
+  onToggleLocalOnly,
+  showLocalOnlyToggle = false,
 }: Props) {
   const { user, loginModal } = useUser();
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
@@ -141,15 +149,18 @@ export function EditorToolbar({
         {/* Right: save + focus + overflow menu */}
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
           {!isViewOnly && (user ? (
-            <Button
-              variant="contained"
-              color="secondary"
-              size="small"
-              onClick={onSave}
-              sx={{ fontWeight: 700, px: 2 }}
-            >
-              {saving ? "Saving…" : "Save"}
-            </Button>
+            <Tooltip title={isLocalOnly ? "Saving to device only" : ""}>
+              <Button
+                variant="contained"
+                color="secondary"
+                size="small"
+                onClick={onSave}
+                startIcon={isLocalOnly ? <SmartphoneIcon fontSize="small" /> : undefined}
+                sx={{ fontWeight: 700, px: 2 }}
+              >
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </Tooltip>
           ) : (
             <Button
               variant="contained"
@@ -208,6 +219,24 @@ export function EditorToolbar({
               </ListItemIcon>
               <ListItemText primary="History" />
             </MenuItem>
+
+            {showLocalOnlyToggle && (
+              <MenuItem
+                onClick={() => {
+                  onToggleLocalOnly?.();
+                  setMenuAnchor(null);
+                }}
+              >
+                <ListItemIcon>
+                  <CloudOffIcon fontSize="small" color={isLocalOnly ? "secondary" : "inherit"} />
+                </ListItemIcon>
+                <ListItemText
+                  primary="Device only"
+                  secondary={isLocalOnly ? "On · won't sync to relays" : "Off · syncs to relays"}
+                  secondaryTypographyProps={{ sx: { fontSize: "0.7rem" } }}
+                />
+              </MenuItem>
+            )}
 
             <Divider />
 

@@ -25,6 +25,7 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
+import SmartphoneIcon from "@mui/icons-material/Smartphone";
 import { useDocumentContext } from "../contexts/DocumentContext.tsx";
 import { signerManager } from "../signer/index.ts";
 import { useRelays } from "../contexts/RelayContext.tsx";
@@ -102,6 +103,8 @@ export default function DocumentList({
     addDocument,
     addDeletionRequest,
     selectedDocumentId,
+    localOnlyAddresses,
+    markLocalOnly,
   } = useDocumentContext();
   const [docRelays, setDocRelays] = useState<Map<string, string[]>>(new Map());
 
@@ -165,6 +168,9 @@ export default function DocumentList({
               viewKey: entry.viewKey,
               editKey: entry.editKey,
             });
+            if (entry.localOnly) {
+              markLocalOnly(entry.address, true);
+            }
           } catch {
             // Skip events that can't be decrypted (e.g. belong to another user)
           }
@@ -197,7 +203,9 @@ export default function DocumentList({
 
         // ── Phase 3: re-broadcast any events saved while offline ──
         for (const entry of localEntries) {
-          if (entry.pendingBroadcast) {
+          // Never re-broadcast device-only events. They are stored unsigned
+          // (sig: "") so relays would reject them anyway, but skip explicitly.
+          if (entry.pendingBroadcast && !entry.localOnly) {
             publishEvent(entry.event, relays)
               .then(() => markBroadcast(entry.address))
               .catch(() => {});
@@ -494,7 +502,29 @@ export default function DocumentList({
                               ))}
                             </Box>
                           )}
-                          {relays.length > 0 && (
+                          {localOnlyAddresses.has(address) ? (
+                            <Box
+                              component="span"
+                              sx={{ display: "flex", alignItems: "center", gap: 0.3, mt: 0.4 }}
+                            >
+                              <SmartphoneIcon sx={{ fontSize: "0.58rem", opacity: 0.45 }} />
+                              <Box
+                                component="span"
+                                sx={{
+                                  fontSize: "0.58rem",
+                                  fontFamily: "monospace",
+                                  opacity: 0.45,
+                                  bgcolor: (t) => alpha(t.palette.text.primary, 0.07),
+                                  borderRadius: 0.75,
+                                  px: 0.6,
+                                  py: 0.1,
+                                  lineHeight: 1.6,
+                                }}
+                              >
+                                Device only
+                              </Box>
+                            </Box>
+                          ) : relays.length > 0 && (
                             <Box
                               component="span"
                               sx={{ display: "flex", flexWrap: "wrap", gap: 0.4, mt: 0.4 }}
