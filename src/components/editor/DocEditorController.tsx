@@ -195,6 +195,7 @@ export function DocumentEditorController({
     ? draftLocalOnly
     : (selectedDocumentId ? localOnlyAddresses.has(selectedDocumentId) : false);
   const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
+  const [localOnlyConfirmOpen, setLocalOnlyConfirmOpen] = useState(false);
   // Capture isLocalOnly at delete-click time so the modal always uses the right value
   const pendingDeleteLocalOnlyRef = useRef<boolean>(false);
 
@@ -561,19 +562,13 @@ export function DocumentEditorController({
     await saveSnapshotWithAddress(address, content, isLocalOnly);
   };
 
-  const LOCAL_ONLY_TIP_KEY = "nostr-docs-device-only-tip-shown";
-
   const handleToggleLocalOnly = async () => {
     if (isDraft) {
-      const next = !draftLocalOnly;
-      setDraftLocalOnly(next);
-      if (next && !localStorage.getItem(LOCAL_ONLY_TIP_KEY)) {
-        localStorage.setItem(LOCAL_ONLY_TIP_KEY, "1");
-        setToast({
-          open: true,
-          message: "Device only: this note won't sync to relays or other devices. If deleted, it's gone.",
-          severity: "success",
-        });
+      if (!draftLocalOnly) {
+        // Turning on — show warning first
+        setLocalOnlyConfirmOpen(true);
+      } else {
+        setDraftLocalOnly(false);
       }
       return;
     }
@@ -582,17 +577,8 @@ export function DocumentEditorController({
       // Turning off — requires confirmation since it will publish to relays
       setSyncConfirmOpen(true);
     } else {
-      // Turning on — update IndexedDB and context immediately
-      await setLocalOnlyFlag(selectedDocumentId!, true);
-      markLocalOnly(selectedDocumentId!, true);
-      if (!localStorage.getItem(LOCAL_ONLY_TIP_KEY)) {
-        localStorage.setItem(LOCAL_ONLY_TIP_KEY, "1");
-        setToast({
-          open: true,
-          message: "Device only: this note won't sync to relays or other devices. If deleted, it's gone.",
-          severity: "success",
-        });
-      }
+      // Turning on — show warning first
+      setLocalOnlyConfirmOpen(true);
     }
   };
 
@@ -870,6 +856,28 @@ export function DocumentEditorController({
           });
         }}
         onCancel={() => setSyncConfirmOpen(false)}
+      />
+      <ConfirmModal
+        open={localOnlyConfirmOpen}
+        title="Save to this device only?"
+        description="This page won't sync to your relays or any other device. This will be the only copy — if you lose this device or clear the app, it's gone permanently."
+        confirmText="Save device only"
+        cancelText="Keep syncing"
+        onConfirm={async () => {
+          setLocalOnlyConfirmOpen(false);
+          if (isDraft) {
+            setDraftLocalOnly(true);
+          } else {
+            await setLocalOnlyFlag(selectedDocumentId!, true);
+            markLocalOnly(selectedDocumentId!, true);
+          }
+          setToast({
+            open: true,
+            message: "Device only on. This note won't sync to relays or other devices.",
+            severity: "success",
+          });
+        }}
+        onCancel={() => setLocalOnlyConfirmOpen(false)}
       />
       <ConfirmModal
         open={historyConfirmOpen}

@@ -20,6 +20,8 @@ interface DocumentContextValue {
   selectedDocumentId: string | null;
 
   setSelectedDocumentId: (id: string | null) => void;
+  /** Addresses navigated to in the current browser session. */
+  sessionVisited: Set<string>;
   addDocument: (
     document: Event,
     keys?: { viewKey?: string; editKey?: string },
@@ -85,15 +87,29 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
   const [documents, setDocuments] = useState<Map<string, DocumentHistory>>(
     new Map(),
   );
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
+  const [_selectedDocumentId, _setSelectedDocumentId] = useState<string | null>(
     null,
   );
+  const [sessionVisited, setSessionVisited] = useState<Set<string>>(new Set());
   const [deletedEventIds, setDeletedEventIds] = useState<Set<string>>(
     new Set(),
   );
   const [localOnlyAddresses, setLocalOnlyAddresses] = useState<Set<string>>(
     new Set(),
   );
+
+  const selectedDocumentId = _selectedDocumentId;
+  const setSelectedDocumentId = (id: string | null) => {
+    _setSelectedDocumentId(id);
+    if (id) {
+      setSessionVisited((prev) => {
+        if (prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.add(id);
+        return next;
+      });
+    }
+  };
 
   const markLocalOnly = (address: string, localOnly: boolean) => {
     setLocalOnlyAddresses((prev) => {
@@ -126,7 +142,7 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
       return newDocuments;
     });
 
-    setSelectedDocumentId((current) => (current === id ? null : current));
+    _setSelectedDocumentId((current) => (current === id ? null : current));
   };
 
   const visibleDocuments = useMemo(() => {
@@ -153,6 +169,7 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
     return new Map(
       [...documents.entries()]
         .filter(([address, history]) => {
+          if (!sessionVisited.has(address)) return false;
           if (deletedEventIds.has(address)) return false;
           const pubkey = history.versions[0]?.event.pubkey;
           return pubkey !== user?.pubkey;
@@ -167,7 +184,7 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
         ])
         .filter(([, h]) => h.versions.length > 0),
     );
-  }, [documents, deletedEventIds, user?.pubkey]);
+  }, [documents, deletedEventIds, user?.pubkey, sessionVisited]);
 
   const addDocument = async (
     document: Event,
@@ -212,6 +229,7 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
         documents,
         selectedDocumentId,
         setSelectedDocumentId,
+        sessionVisited,
         addDocument,
         removeDocument,
         deletedEventIds,

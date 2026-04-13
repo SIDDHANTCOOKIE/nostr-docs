@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTheme } from "@mui/material/styles";
 import { alpha } from "@mui/material/styles";
 import { fetchAllDocuments } from "../nostr/fetchFile.ts";
@@ -231,23 +231,17 @@ export default function DocumentList({
     navigate("/");
   };
 
-  // Visited docs that aren't already in the explicit shared list
-  const visitedOnlyDocs = useMemo(
-    () => new Map([...visitedDocuments.entries()].filter(([addr]) => !sharedDocuments.has(addr))),
-    [visitedDocuments, sharedDocuments],
-  );
-
   const allDocs =
     tab === "personal" ? visibleDocuments
     : tab === "shared"  ? sharedDocuments
-    :                     visitedOnlyDocs;
+    :                     visitedDocuments;
 
   // Auto-switch to the tab that owns the currently selected doc
   useEffect(() => {
     if (!selectedDocumentId) return;
     if (visibleDocuments.has(selectedDocumentId)) setTab("personal");
     else if (sharedDocuments.has(selectedDocumentId)) setTab("shared");
-    else if (visitedOnlyDocs.has(selectedDocumentId)) setTab("visited");
+    else if (visitedDocuments.has(selectedDocumentId)) setTab("visited");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDocumentId]);
 
@@ -261,7 +255,7 @@ export default function DocumentList({
 
   const personalCount = visibleDocuments.size;
   const sharedCount = sharedDocuments.size;
-  const visitedCount = visitedOnlyDocs.size;
+  const visitedCount = visitedDocuments.size;
 
   return (
     <Box
@@ -291,7 +285,9 @@ export default function DocumentList({
       <Tabs
         value={tab}
         onChange={(_, v) => setTab(v)}
-        variant="fullWidth"
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
         sx={{ flexShrink: 0, borderBottom: "1px solid", borderColor: "divider" }}
         textColor="secondary"
         indicatorColor="secondary"
