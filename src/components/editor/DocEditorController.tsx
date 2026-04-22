@@ -9,12 +9,15 @@ import {
   Chip,
   InputBase,
   CircularProgress,
+  IconButton,
+  Tooltip,
 } from "@mui/material";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 import LabelOutlinedIcon from "@mui/icons-material/LabelOutlined";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import SmartphoneIcon from "@mui/icons-material/Smartphone";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import { useDocMetadata } from "../../contexts/DocMetadataContext";
 import { useNavigate, useBlocker } from "react-router-dom";
 import { finalizeEvent, getPublicKey, getEventHash, nip19, type Event } from "nostr-tools";
@@ -30,6 +33,7 @@ import { EncryptedFileNode } from "./extensions/EncryptedFileNode";
 import { useDocumentContext } from "../../contexts/DocumentContext";
 import { useUser } from "../../contexts/UserContext";
 import { useSharedPages } from "../../contexts/SharedDocsContext";
+import { CommentProvider } from "../../contexts/CommentContext";
 import { signerManager } from "../../signer";
 import { useRelays } from "../../contexts/RelayContext";
 import { publishEvent } from "../../nostr/publish";
@@ -161,6 +165,7 @@ export function DocumentEditorController({
   const history = selectedDocumentId ? documents.get(selectedDocumentId) : null;
   const isOwner = !!user?.pubkey && !!history?.versions[0]?.event.pubkey && user.pubkey === history.versions[0].event.pubkey;
   const isViewOnly = !!viewKey && !editKey && !isOwner;
+  const commentsEnabled = !!viewKey && !!selectedDocumentId;
 
   const versions =
     history?.versions.map((v) => ({
@@ -205,6 +210,7 @@ export function DocumentEditorController({
   const [localOnlyConfirmOpen, setLocalOnlyConfirmOpen] = useState(false);
   // Capture isLocalOnly at delete-click time so the modal always uses the right value
   const pendingDeleteLocalOnlyRef = useRef<boolean>(false);
+  const [showComments, setShowComments] = useState(false);
 
   const { servers: blossomServers } = useBlossomServers();
 
@@ -693,7 +699,7 @@ export function DocumentEditorController({
 
   /* ── Render ────────────────────────────────────────────── */
 
-  return (
+  const editorJsx = (
     <Box
       sx={{
         height: "100%",
@@ -741,7 +747,22 @@ export function DocumentEditorController({
           onExportPlainText={handleExportPlainText}
           onExportPdf={handleExportPdf}
           onExportDoc={handleExportDoc}
+          showComments={commentsEnabled ? showComments : undefined}
+          onToggleComments={commentsEnabled ? () => setShowComments((s) => !s) : undefined}
         />
+      )}
+      {isViewOnly && commentsEnabled && (
+        <Box sx={{ display: "flex", justifyContent: "flex-end", p: 1 }}>
+          <Tooltip title={showComments ? "Hide comments" : "Show comments"}>
+            <IconButton
+              size="small"
+              onClick={() => setShowComments((s) => !s)}
+              color={showComments ? "secondary" : "default"}
+            >
+              <ChatBubbleOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
       )}
 
       <Paper
@@ -769,6 +790,10 @@ export function DocumentEditorController({
           onToggleMode={() => setMode("edit")}
           isMobile={isMobile}
           canEdit={!isViewOnly}
+          commentsEnabled={commentsEnabled}
+          showComments={commentsEnabled && showComments}
+          onCloseComments={() => setShowComments(false)}
+          docEventId={activeVersion?.event.id ?? ""}
         />
       </Paper>
 
@@ -1005,4 +1030,14 @@ export function DocumentEditorController({
       />
     </Box>
   );
+
+  if (commentsEnabled) {
+    return (
+      <CommentProvider viewKey={viewKey!} docAddress={selectedDocumentId!}>
+        {editorJsx}
+      </CommentProvider>
+    );
+  }
+
+  return editorJsx;
 }

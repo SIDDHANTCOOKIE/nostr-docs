@@ -186,3 +186,4 @@ export async function removeLocalEvent(address: string): Promise<void> {
     req.onerror = () => reject(req.error);
   });
 }
+
