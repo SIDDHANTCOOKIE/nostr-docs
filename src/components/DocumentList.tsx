@@ -496,7 +496,18 @@ export default function DocumentList({
                     <ListItemText
                       primary={
                         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                          <Box component="span" sx={{ noWrap: true }}>{displayTitle}</Box>
+                          <Box
+                            component="span"
+                            sx={{
+                              flex: 1,
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {displayTitle}
+                          </Box>
                           <IconButton
                             className="rename-btn"
                             size="small"
