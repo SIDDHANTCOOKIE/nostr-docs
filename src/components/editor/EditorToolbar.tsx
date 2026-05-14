@@ -383,7 +383,7 @@ export function EditorToolbar({
                 <ArticleOutlinedIcon fontSize="small" />
               </ListItemIcon>
               <ListItemText
-                primary="Word (.doc)"
+                primary="Word (.docx)"
                 secondary="Microsoft Word / Google Docs"
                 secondaryTypographyProps={{ sx: { fontSize: "0.7rem" } }}
               />
