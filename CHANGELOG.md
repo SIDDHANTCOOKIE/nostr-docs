@@ -1,6 +1,7 @@
 # 0.9.6
 - Add tables
 - Add indents on regular text
+- Fix apk image issues
 
 # 0.9.5
 - Add forms in pages (interoperable with forstr.app)
