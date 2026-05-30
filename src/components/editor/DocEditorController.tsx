@@ -1340,6 +1340,7 @@ export function DocumentEditorController({
             relays,
             viewKey,
             editKey,
+            blossomServers,
           );
 
           const sharedDocTag = [

@@ -15,11 +15,6 @@ import {
   Typography,
   Select,
   FormControl,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
 } from "@mui/material";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import EditIcon from "@mui/icons-material/Edit";
@@ -58,6 +53,68 @@ import { useUser } from "../../contexts/UserContext";
 import { useDocMetadata } from "../../contexts/DocMetadataContext";
 import { useEditorState } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
+import { useBlossomServers } from "../../contexts/BlossomContext";
+import { loadFontResources, saveFontResource } from "../../lib/fontStore";
+import { uploadBinaryToBlossom } from "../../blossom/client";
+import { registerFontFaceFromBlob } from "../../lib/fontRegister";
+
+const DEFAULT_FONT_FAMILIES = [
+  "Inter",
+  "Arial",
+  "Comic Sans MS",
+  "Courier New",
+  "Georgia",
+  "Impact",
+  "Tahoma",
+  "Times New Roman",
+  "Trebuchet MS",
+  "Verdana",
+];
+
+const FONT_FILE_FORMATS = {
+  ".woff2": { format: "woff2" },
+  ".woff": { format: "woff" },
+  ".ttf": { format: "truetype" },
+  ".otf": { format: "opentype" },
+} as const;
+
+function makeUniqueFontFamily(baseName: string, existingFamilies: string[]) {
+  let candidate = baseName.trim() || "Uploaded Font";
+  let suffix = 2;
+
+  while (existingFamilies.includes(candidate)) {
+    candidate = `${baseName.trim() || "Uploaded Font"} ${suffix}`;
+    suffix += 1;
+  }
+
+  return candidate;
+}
+
+
+async function resolveStoredFontBlob(entry: { blob: Blob; mimeType: string; blossomUrl?: string }) {
+  if (entry.blossomUrl) {
+    try {
+      const response = await fetch(entry.blossomUrl);
+      if (response.ok) {
+        const blob = await response.blob();
+        if (blob.size > 0) {
+          return blob;
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to fetch stored font from Blossom, falling back to local copy:", error);
+    }
+  }
+
+  return entry.blob;
+}
+
+async function sha256Hex(data: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 type EditorMode = "edit" | "preview" | "split";
 
@@ -126,36 +183,107 @@ export function EditorToolbar({
   hasEditKey = false,
 }: Props) {
   const { user, loginModal } = useUser();
+  const { servers: blossomServers } = useBlossomServers();
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
-  const [fontDialogOpen, setFontDialogOpen] = useState(false);
-  const [newFontName, setNewFontName] = useState("");
   const [availableFonts, setAvailableFonts] = useState<string[]>([
-    "Inter",
-    "Arial",
-    "Comic Sans MS",
-    "Courier New",
-    "Georgia",
-    "Impact",
-    "Tahoma",
-    "Times New Roman",
-    "Trebuchet MS",
-    "Verdana"
+    ...DEFAULT_FONT_FAMILIES,
   ]);
+  const uploadedFontResourcesRef = useRef<
+    { family: string; objectUrl: string; styleEl: HTMLStyleElement }[]
+  >([]);
+  const fontUploadInputRef = useRef<HTMLInputElement>(null);
 
-  const handleAddFont = () => {
-    const font = newFontName.trim();
-    if (font) {
-      if (!availableFonts.includes(font)) {
-        setAvailableFonts([...availableFonts, font]);
+  useEffect(() => {
+    return () => {
+      uploadedFontResourcesRef.current.forEach(({ objectUrl, styleEl }) => {
+        URL.revokeObjectURL(objectUrl);
+        styleEl.remove();
+      });
+      uploadedFontResourcesRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      const storedFonts = await loadFontResources().catch(() => []);
+      if (cancelled || storedFonts.length === 0) return;
+
+      const families = new Set<string>();
+      const existingFamilies = new Set(uploadedFontResourcesRef.current.map((resource) => resource.family));
+
+      for (const entry of storedFonts) {
+        if (existingFamilies.has(entry.family)) continue;
+        const blob = await resolveStoredFontBlob(entry);
+        const { objectUrl, styleEl } = registerFontFaceFromBlob(entry.family, blob, entry.format);
+        uploadedFontResourcesRef.current.push({ family: entry.family, objectUrl, styleEl });
+        families.add(entry.family);
       }
-      editor?.chain().focus().setFontFamily(font).run();
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = `https://fonts.googleapis.com/css2?family=${font.replace(/ /g, "+")}&display=swap`;
-      document.head.appendChild(link);
+
+      if (families.size > 0) {
+        setAvailableFonts((current) => Array.from(new Set([...current, ...families])));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleUploadFontFile = async (file: File) => {
+    const extension = `.${file.name.split(".").pop()?.toLowerCase() || ""}`;
+    const fontFormat = Object.prototype.hasOwnProperty.call(FONT_FILE_FORMATS, extension)
+      ? FONT_FILE_FORMATS[extension as keyof typeof FONT_FILE_FORMATS]
+      : undefined;
+
+    if (!fontFormat) {
+      window.alert("Upload a font file in .woff2, .woff, .ttf, or .otf format.");
+      return;
     }
-    setFontDialogOpen(false);
-    setNewFontName("");
+
+    const baseName = file.name.replace(/\.[^.]+$/, "").replace(/[ _]+/g, " ").trim();
+    const family = makeUniqueFontFamily(baseName, availableFonts);
+    const { objectUrl, styleEl } = registerFontFaceFromBlob(family, file, fontFormat.format);
+    uploadedFontResourcesRef.current.push({ family, objectUrl, styleEl });
+    setAvailableFonts((fonts) => (fonts.includes(family) ? fonts : [...fonts, family]));
+    editor?.chain().focus().setFontFamily(family).run();
+
+    await saveFontResource({
+      family,
+      blob: file,
+      format: fontFormat.format,
+      mimeType: file.type || "application/octet-stream",
+      addedAt: Date.now(),
+    });
+
+    if (blossomServers.length > 0) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const sha256 = await sha256Hex(bytes.buffer);
+
+      try {
+        const blossomUrl = await uploadBinaryToBlossom(
+          blossomServers,
+          bytes,
+          sha256,
+          file.type || "application/octet-stream",
+        );
+        await saveFontResource({
+          family,
+          blob: file,
+          format: fontFormat.format,
+          mimeType: file.type || "application/octet-stream",
+          addedAt: Date.now(),
+          blossomUrl,
+        });
+      } catch (error) {
+        console.warn("Font uploaded locally, but Blossom mirror failed:", error);
+      }
+    }
+  };
+
+  const openFontFilePicker = () => {
+    fontUploadInputRef.current?.click();
   };
   const [historyAnchor, setHistoryAnchor] = useState<null | HTMLElement>(null);
   const [tableMenuAnchor, setTableMenuAnchor] = useState<null | HTMLElement>(null);
@@ -186,6 +314,10 @@ export function EditorToolbar({
     editor,
     selector: ({ editor: e }) => e?.isActive("table") ?? false,
   });
+  const activeFontFamily = editor?.getAttributes("textStyle").fontFamily || "Inter";
+  const fontOptions = activeFontFamily && !availableFonts.includes(activeFontFamily)
+    ? [...availableFonts, activeFontFamily]
+    : availableFonts;
 
   const handleLink = () => {
     if (!editor) return;
@@ -560,26 +692,43 @@ export function EditorToolbar({
             {/* Font Family */}
             <FormControl size="small" sx={{ minWidth: 120 }}>
               <Select
-                value={editor.getAttributes("textStyle").fontFamily || "Inter"}
+                value={activeFontFamily}
+                renderValue={(value) => (
+                  <span style={{ fontFamily: String(value) }}>{String(value)}</span>
+                )}
                 onChange={(e) => {
                   const font = e.target.value;
-                  if (font === "__ADD_FONT__") {
-                    setFontDialogOpen(true);
+                  if (font === "__UPLOAD_FONT__") {
+                    openFontFilePicker();
                   } else {
                     editor.chain().focus().setFontFamily(font).run();
                   }
                 }}
                 sx={{ height: 28, fontSize: "0.75rem", ".MuiSelect-select": { py: 0.5 } }}
               >
-                {availableFonts.map((font) => (
+                {fontOptions.map((font) => (
                   <MenuItem key={font} value={font} style={{ fontFamily: font }}>
                     {font}
                   </MenuItem>
                 ))}
                 <Divider />
-                <MenuItem value="__ADD_FONT__"><em>Add font...</em></MenuItem>
+                <MenuItem value="__UPLOAD_FONT__"><em>Upload font file (.woff2, .woff, .ttf, .otf)...</em></MenuItem>
               </Select>
             </FormControl>
+
+            <input
+              ref={fontUploadInputRef}
+              type="file"
+              accept=".woff2,.woff,.ttf,.otf"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  handleUploadFontFile(file);
+                  e.target.value = "";
+                }
+              }}
+            />
 
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
@@ -890,34 +1039,6 @@ export function EditorToolbar({
         </>
       )}
 
-      <Dialog open={fontDialogOpen} onClose={() => setFontDialogOpen(false)}>
-        <DialogTitle>Add Font</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Enter the exact name of the font (e.g., 'Roboto' or 'Fira Code'). 
-            If it's available on Google Fonts, it will be loaded dynamically.
-          </Typography>
-          <TextField
-            autoFocus
-            margin="dense"
-            label="Font Family Name"
-            type="text"
-            fullWidth
-            variant="outlined"
-            value={newFontName}
-            onChange={(e) => setNewFontName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleAddFont();
-            }}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setFontDialogOpen(false)}>Cancel</Button>
-          <Button onClick={handleAddFont} variant="contained" disabled={!newFontName.trim()}>
-            Add
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Paper>
   );
 }

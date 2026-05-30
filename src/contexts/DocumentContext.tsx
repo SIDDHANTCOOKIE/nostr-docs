@@ -1,6 +1,8 @@
 import { getPublicKey, nip44, type Event } from "nostr-tools";
 import React, { createContext, useContext, useMemo, useState } from "react";
 import { signerManager } from "../signer";
+import { saveFontResource } from "../lib/fontStore";
+import { registerFontFaceFromBlob } from "../lib/fontRegister";
 import { getConversationKey } from "nostr-tools/nip44";
 import { hexToBytes } from "nostr-tools/utils";
 import { useUser, type UserProfile } from "./UserContext";
@@ -230,6 +232,45 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
       next.set(address, history);
       return next;
     });
+
+    // If the event contains font tags (added when sharing), try to fetch
+    // and persist those fonts locally so the editor can register them.
+    (async () => {
+      try {
+        const fontTags = document.tags.filter((t) => t[0] === "font");
+        for (const tag of fontTags) {
+          // tag format: ["font", family, url, format]
+          const family = tag[1];
+          const url = tag[2];
+          const format = (tag[3] as any) || "woff2";
+          if (!url || !family) continue;
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`Failed to fetch font: ${res.status}`);
+            const blob = await res.blob();
+            const mimeType = res.headers.get("content-type") || "font/woff2";
+            await saveFontResource({
+              family,
+              blob,
+              format: format as any,
+              mimeType,
+              addedAt: Date.now(),
+              blossomUrl: url,
+            });
+              // register immediately so the UI shows the font without reload
+              try {
+                registerFontFaceFromBlob(family, blob, format as any);
+              } catch (err) {
+                console.warn("Failed to register shared font immediately:", err);
+              }
+          } catch (err) {
+            console.warn("Could not persist shared font:", family, url, err);
+          }
+        }
+      } catch (err) {
+        /* ignore */
+      }
+    })();
   };
 
   return (
