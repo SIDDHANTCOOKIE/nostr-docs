@@ -125,19 +125,7 @@ export function EditorToolbar({
   const tableMenuOpen = Boolean(tableMenuAnchor);
 
   const exportButtonRef = useRef<HTMLLIElement>(null);
-  const hideExportTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [exportOpen, setExportOpen] = useState(false);
-
-  const handleExportEnter = () => {
-    clearTimeout(hideExportTimer.current);
-    setExportOpen(true);
-  };
-
-  const handleExportLeave = () => {
-    hideExportTimer.current = setTimeout(() => {
-      setExportOpen(false);
-    }, 200);
-  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -295,8 +283,7 @@ export function EditorToolbar({
 
             <MenuItem
               ref={exportButtonRef}
-              onMouseEnter={handleExportEnter}
-              onMouseLeave={handleExportLeave}
+
               onClick={(e) => {
                 e.stopPropagation();
                 // For mobile, a click can toggle it too if hover isn't available
@@ -356,8 +343,7 @@ export function EditorToolbar({
             anchorOrigin={{ vertical: "top", horizontal: "right" }}
             transformOrigin={{ vertical: "top", horizontal: "left" }}
             MenuListProps={{
-              onMouseEnter: handleExportEnter,
-              onMouseLeave: handleExportLeave,
+
             }}
             slotProps={{
               paper: {
