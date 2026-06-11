@@ -92,8 +92,8 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({
       const profile = (await withTimeout(
         fetchProfile(pubkey, relays.relays),
         3000
-      )) as UserProfile;
-      const userProfile = { pubkey, ...profile };
+      )) as any;
+      const userProfile = { pubkey, avatar: profile?.picture || profile?.avatar, ...profile };
       setUser(userProfile);
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(userProfile));
     } catch {
