@@ -1,4 +1,4 @@
-import { getPublicKey, nip44, type Event } from "nostr-tools";
+import { getPublicKey, getEventHash, nip44, type Event } from "nostr-tools";
 import React, {
   createContext,
   useContext,
@@ -17,7 +17,7 @@ import { getEventAddress } from "../utils/helpers";
 import {
   loadAllLocalEvents,
   loadVisitedEvents,
-  storeLocalEvent,
+  saveLocalDocState,
   markBroadcast,
   type LocalStoredEvent,
 } from "../lib/localStore";
@@ -25,7 +25,9 @@ import { KIND_FILE } from "../nostr/kinds";
 import { fetchAllDocuments } from "../nostr/fetchFile";
 import { fetchDeleteRequests } from "../nostr/fetchDelete";
 import { publishEvent } from "../nostr/publish";
-import { subscribe, fetchCachedMany, type Subscription } from "../dataLayer";
+import { encryptContent } from "../utils/encryption";
+import { makeTag } from "../utils/makeTag";
+import { subscribe, fetchCachedMany, fetchCachedByAddresses, resolveEventsByAddress, cacheLocalEvents, type Subscription } from "../dataLayer";
 
 type DocumentVersion = {
   event: Event;
@@ -49,6 +51,19 @@ interface DocumentContextValue {
     document: Event,
     keys?: { viewKey?: string; editKey?: string },
   ) => Promise<void>;
+
+  /**
+   * Create a brand-new owner-encrypted page from raw Markdown. Returns the new
+   * document address. Throws if there is no signer.
+   *
+   * `publish` (default true) broadcasts the page to the user's relays; when
+   * false the page is stored on this device only (unsigned, never published),
+   * mirroring the editor's "Device" mode.
+   */
+  addImportedDocument: (
+    markdown: string,
+    options?: { publish?: boolean },
+  ) => Promise<string>;
 
   removeDocument: (id: string) => void;
   addDeletionRequest: (delEvent: Event) => void;
@@ -298,6 +313,84 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
     [],
   );
 
+  /**
+   * Create a new owner-encrypted page from raw Markdown. Mirrors the editor's
+   * "Save" path for a brand-new document: NIP-44 encrypt with the signer's own
+   * key, sign a fresh kind-33457 event, cache it in the local relay
+   * (offline-first) and broadcast best-effort. When `publish` is false the event
+   * is left unsigned (never accepted by any relay) — a device-only page.
+   */
+  const addImportedDocument = useCallback(
+    async (
+      markdown: string,
+      options?: { publish?: boolean },
+    ): Promise<string> => {
+      const publish = options?.publish ?? true;
+      const signer = await signerManager.getSigner();
+      if (!signer) throw new Error("Not signed in");
+
+      const pubkey = await signer.getPublicKey();
+      const dTag = makeTag(6);
+      const address = `${KIND_FILE}:${pubkey}:${dTag}`;
+
+      const encryptedContent = await encryptContent(markdown);
+      const createdAt = Math.floor(Date.now() / 1000);
+
+      let stored: Event;
+      if (publish) {
+        stored = await signer.signEvent({
+          kind: KIND_FILE,
+          tags: [["d", dTag]],
+          content: encryptedContent,
+          created_at: createdAt,
+        });
+      } else {
+        // Device-only: a valid event id with an empty signature. Relays reject
+        // it, so it structurally cannot be published.
+        const template = {
+          kind: KIND_FILE,
+          tags: [["d", dTag]],
+          content: encryptedContent,
+          created_at: createdAt,
+          pubkey,
+        };
+        stored = { ...template, id: getEventHash(template), sig: "" };
+      }
+
+      // The event lives in the local relay; only keys/flags go to the legacy
+      // store (here just the device-only flag).
+      await addDocument(stored);
+      cacheLocalEvents([stored]);
+      await saveLocalDocState({
+        address,
+        pendingBroadcast: publish,
+        savedAt: Date.now(),
+        localOnly: publish ? undefined : true,
+        lastEventCreatedAt: stored.created_at,
+      });
+
+      if (!publish) {
+        setLocalOnlyAddresses((prev) => {
+          if (prev.has(address)) return prev;
+          const next = new Set(prev);
+          next.add(address);
+          return next;
+        });
+        return address;
+      }
+
+      try {
+        await publishEvent(stored, relays);
+        await markBroadcast(address);
+      } catch (err) {
+        console.warn("Imported page kept locally (broadcast failed):", err);
+      }
+
+      return address;
+    },
+    [relays, addDocument],
+  );
+
   // Hydrate visited pages from IndexedDB on mount so they survive a reload.
   // Runs independently of login — visited docs decrypt with their stored
   // viewKey, so no signer is required. Repopulates both the document cache and
@@ -312,10 +405,27 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
 
         const visitedEntries = await loadVisitedEvents();
         if (visitedEntries.length === 0) return;
+
+        // Resolve each visited page's event: local relay cache first, then a
+        // live relay fetch (the relay's write-through is debounced, so a page
+        // just opened may not be on disk yet). Falls back to a legacy row's
+        // `event` (read-only back-compat).
+        const cached = await resolveEventsByAddress(
+          visitedEntries.map((e) => e.address),
+          relays,
+        );
+        const cachedByAddress = new Map<string, Event>();
+        for (const ev of cached) {
+          const a = getEventAddress(ev);
+          if (a) cachedByAddress.set(a, ev);
+        }
+
         const addresses: string[] = [];
         for (const entry of visitedEntries) {
+          const event = cachedByAddress.get(entry.address) ?? entry.event;
+          if (!event) continue;
           try {
-            await addDocument(entry.event, {
+            await addDocument(event, {
               viewKey: entry.viewKey,
               editKey: entry.editKey,
             });
@@ -331,7 +441,7 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
         console.warn("Failed to hydrate visited pages:", err);
       }
     })();
-  }, [addDocument]);
+  }, [addDocument, relays]);
 
   // Reset user's personal documents when logged out
   useEffect(() => {
@@ -342,8 +452,18 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
       (async () => {
         try {
           const visitedEntries = await loadVisitedEvents();
+          const cached = await fetchCachedByAddresses(
+            visitedEntries.map((e) => e.address),
+          );
+          const cachedByAddress = new Map<string, Event>();
+          for (const ev of cached) {
+            const a = getEventAddress(ev);
+            if (a) cachedByAddress.set(a, ev);
+          }
           for (const entry of visitedEntries) {
-            await addDocument(entry.event, {
+            const event = cachedByAddress.get(entry.address) ?? entry.event;
+            if (!event) continue;
+            await addDocument(event, {
               viewKey: entry.viewKey,
               editKey: entry.editKey,
             });
@@ -379,19 +499,23 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
 
         for (const entry of localEntries) {
           localEntriesRef.current.set(entry.address, entry);
-          try {
-            await addDocument(entry.event, {
-              viewKey: entry.viewKey,
-              editKey: entry.editKey,
-            });
-            if (entry.visited) {
-              setSessionVisited((prev) => new Set([...prev, entry.address]));
+          // Legacy rows still carry the event; newer rows resolve it from the
+          // local relay cache in phase 1b below.
+          if (entry.event) {
+            try {
+              await addDocument(entry.event, {
+                viewKey: entry.viewKey,
+                editKey: entry.editKey,
+              });
+            } catch {
+              // Skip events that can't be decrypted
             }
-            if (entry.localOnly || entry.pendingBroadcast || !entry.event.sig) {
-              markLocalOnly(entry.address, true);
-            }
-          } catch {
-            // Skip events that can't be decrypted
+          }
+          if (entry.visited) {
+            setSessionVisited((prev) => new Set([...prev, entry.address]));
+          }
+          if (entry.localOnly || entry.pendingBroadcast || (entry.event && !entry.event.sig)) {
+            markLocalOnly(entry.address, true);
           }
         }
       } catch (err) {
@@ -449,13 +573,13 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
                 return next;
               });
 
-              storeLocalEvent({
+              saveLocalDocState({
                 address,
-                event: doc,
                 viewKey,
                 editKey,
                 pendingBroadcast: false,
                 savedAt: Date.now(),
+                lastEventCreatedAt: doc.created_at,
               }).catch(() => {});
             }
           },
@@ -466,9 +590,22 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
         await fetchDeleteRequests(relays, addDeletionRequest, pubkey);
 
         // ── Phase 3: Re-broadcast offline saves ─────────────
-        for (const entry of localEntries) {
-          if (entry.pendingBroadcast && !entry.localOnly) {
-            publishEvent(entry.event, relays)
+        const pending = localEntries.filter(
+          (entry) => entry.pendingBroadcast && !entry.localOnly,
+        );
+        if (pending.length > 0) {
+          const cachedPending = await fetchCachedByAddresses(
+            pending.map((entry) => entry.address),
+          );
+          const cachedByAddress = new Map<string, Event>();
+          for (const ev of cachedPending) {
+            const a = getEventAddress(ev);
+            if (a) cachedByAddress.set(a, ev);
+          }
+          for (const entry of pending) {
+            const event = cachedByAddress.get(entry.address) ?? entry.event;
+            if (!event) continue;
+            publishEvent(event, relays)
               .then(() => markBroadcast(entry.address))
               .catch(() => {});
           }
@@ -499,13 +636,13 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
 
             await addDocument(event, { viewKey, editKey });
             if (addr) {
-              storeLocalEvent({
+              saveLocalDocState({
                 address: addr,
-                event,
                 viewKey,
                 editKey,
                 pendingBroadcast: false,
                 savedAt: Date.now(),
+                lastEventCreatedAt: event.created_at,
               }).catch(() => {});
             }
           },
@@ -554,6 +691,7 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
         sessionVisited,
         unmarkVisited,
         addDocument,
+        addImportedDocument,
         removeDocument,
         deletedEventIds,
         addDeletionRequest,
