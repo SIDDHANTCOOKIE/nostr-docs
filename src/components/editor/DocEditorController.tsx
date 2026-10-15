@@ -34,6 +34,8 @@ import {
 } from "@tiptap/pm/model";
 import { closeHistory } from "@tiptap/pm/history";
 import StarterKit from "@tiptap/starter-kit";
+import { TextStyle } from "@tiptap/extension-text-style";
+import { FontFamily } from "@tiptap/extension-font-family";
 import { Markdown } from "tiptap-markdown";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -451,6 +453,8 @@ export function DocumentEditorController({
   const editor = useEditor({
     extensions: [
       StarterKit,
+      TextStyle,
+      FontFamily,
       // html: true so <encrypted-file> tags round-trip through markdown storage
       Markdown.configure({ html: true, tightLists: true }),
       Link.configure({ openOnClick: false }),
@@ -1913,6 +1917,7 @@ export function DocumentEditorController({
             relays,
             viewKey,
             editKey,
+            blossomServers,
           );
 
           const sharedDocTag = [
