@@ -25,8 +25,8 @@ import CropFreeIcon from "@mui/icons-material/CropFree";
 import { useDocMetadata } from "../../contexts/DocMetadataContext";
 import { getDocumentTags } from "../AllPagesView";
 import { useNavigate, useBlocker } from "react-router-dom";
-import { finalizeEvent, getPublicKey, getEventHash, nip19, type Event } from "nostr-tools";
-import { hexToBytes } from "nostr-tools/utils";
+import { finalizeEvent, generateSecretKey, getPublicKey, getEventHash, nip19, type Event } from "nostr-tools";
+import { bytesToHex, hexToBytes } from "nostr-tools/utils";
 import { useEditor, type Editor } from "@tiptap/react";
 import {
   DOMParser as ProseMirrorDOMParser,
@@ -89,6 +89,10 @@ import { cacheLocalEvents } from "../../dataLayer";
 
 import { EditorToolbar } from "./EditorToolbar";
 import { DocEditorSurface } from "./DocEditorSurface";
+import { PresenceAvatars } from "./PresenceAvatars";
+import { createCollaborationCaretRenderers } from "./extensions/collaborationCaret";
+import { useCollabSession } from "../../collab/useCollabSession";
+import { useTrustedCollaborators } from "../../collab/useTrustedCollaborators";
 import { deleteEvent } from "../../nostr/deleteRequest";
 import ConfirmModal from "../common/ConfirmModal";
 import ShareModal from "../ShareModal";
@@ -100,6 +104,9 @@ import { uploadToBlossom } from "../../blossom/client";
 import { useBlossomServers } from "../../contexts/BlossomContext";
 import { KIND_FILE } from "../../nostr/kinds";
 import { getLatestVersion } from "../../utils/helpers";
+import { enableGroupSharing, updateRosterMembers, upsertMember, removeMember } from "../../nostr/shareV2";
+import { fetchRoster, parseRootAddress, collabRoom, type DocMember, type DocMode } from "../../nostr/sharedDoc";
+import { fetchProfile } from "../../nostr/fetchProfile";
 import { encodeNKeys } from "../../utils/nkeys";
 import {
   exportAsMarkdown,
@@ -111,6 +118,22 @@ import {
 
 // Delay after the last edit before auto-save fires (ms)
 const AUTO_SAVE_DELAY_MS = 30_000;
+// How long a collab session's last sync-step round-trip is trusted as "still
+// connected" for the autosave gate below.
+const RESYNC_FRESHNESS_MS = 2 * 60_000;
+
+/** Wall-clock seconds. Extracted to module scope so the React Compiler does not
+ *  treat a raw `Date.now()` inside component-scope helpers as a render-time
+ *  impurity. */
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+/** Next content `created_at`: strictly greater than the document's newest known
+ *  version, since relays drop replaceable events that are not strictly newer. */
+function nextContentCreatedAt(prevAt: number | undefined): number {
+  return Math.max(nowSeconds(), (prevAt ?? 0) + 1);
+}
 
 type EditorMode = "edit" | "preview" | "split";
 
@@ -255,26 +278,74 @@ export function DocumentEditorController({
   // viewKey present but no editKey = shared read-only link
   const { user } = useUser();
   const history = selectedDocumentId ? documents.get(selectedDocumentId) : null;
-  const isOwner = !!user?.pubkey && !!history?.versions[0]?.event.pubkey && user.pubkey === history.versions[0].event.pubkey;
+  const activeVersion = history ? getLatestVersion(history) : null;
+  const docOwner = history?.owner ?? history?.versions[0]?.event.pubkey;
+  const isOwner = !!user?.pubkey && !!docOwner && user.pubkey === docOwner;
   const sharedAsAddress = selectedDocumentId ? (docSharedAs.get(selectedDocumentId) ?? null) : null;
-  const isViewOnly = (!!viewKey && !editKey && !isOwner) || !!sharedAsAddress;
+
+  // v2 write permission: a non-owner may edit a group document when the doc is
+  // in `open` mode or their pubkey is a roster `editor`. Fetched once per doc;
+  // legacy docs (editKey / no roster) keep their existing behavior.
+  const [groupCanWrite, setGroupCanWrite] = useState(false);
+  useEffect(() => {
+    setGroupCanWrite(false);
+    if (!selectedDocumentId || !viewKey || !user?.pubkey) return;
+    if (isOwner || editKey) return;
+    const target = parseRootAddress(selectedDocumentId);
+    if (!target) return;
+    let cancelled = false;
+    (async () => {
+      const roster = await fetchRoster(target.owner, target.d, viewKey, relays).catch(() => null);
+      if (cancelled || !roster) return;
+      setGroupCanWrite(
+        roster.mode === "open" ||
+          roster.members.some((m) => m.pubkey === user.pubkey && m.role === "editor"),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDocumentId, viewKey, isOwner, editKey, user?.pubkey, relays]);
+
+  const canWrite = isOwner || !!editKey || groupCanWrite;
+  // Only shared documents (a viewKey or a legacy backup link) can be view-only;
+  // drafts and personal docs must keep their editing UI (the original rule).
+  const isViewOnly = (!!viewKey && !canWrite) || !!sharedAsAddress;
   const commentsEnabled = !!viewKey && !!selectedDocumentId;
+
+  // Realtime collaboration (Yjs over Nostr) for writers on a shared document.
+  // Starts only once the document's snapshot is loaded, so the Yjs doc can be
+  // seeded from it (an empty seed would blank the editor). Solo/draft/view-only
+  // docs never touch this and keep the plain markdown path.
+  const isCollabDoc =
+    canWrite && !!viewKey && !!selectedDocumentId && !isDraft && !!activeVersion;
+  const collab = useCollabSession(
+    isCollabDoc ? selectedDocumentId : null,
+    isCollabDoc ? viewKey : undefined,
+    relays,
+  );
+  const isCollabReady = isCollabDoc && !!collab?.ready;
+  const { collaborators, collaboratorsRef } = useTrustedCollaborators(
+    collab?.awareness,
+    isCollabDoc ? selectedDocumentId : null,
+    isCollabDoc ? viewKey : undefined,
+    relays,
+  );
 
   const sharedAsUrl = sharedAsAddress ? buildSharedDocPath(sharedAsAddress, getKeys) : null;
 
-  // A page opened via someone else's shared link that isn't yet in the user's
-  // Shared list. Offer to promote it (Visited → Shared) — an explicit action so
-  // opening a link never silently writes metadata / prompts the signer.
+  // A view-only visitor to someone else's shared link that isn't yet in their
+  // Shared list may bookmark it. Writers are filed automatically on first save
+  // (see handleSave), so they never see this.
   const alreadyShared = selectedDocumentId ? getKeys(selectedDocumentId).length > 0 : false;
   const isVisitedPage =
-    !!user && !isOwner && !!viewKey && !!selectedDocumentId && !alreadyShared;
+    !!user && !isOwner && !!viewKey && !!selectedDocumentId && !alreadyShared && !canWrite;
 
   const versions =
     history?.versions.map((v) => ({
       id: v.event.id,
       created_at: v.event.created_at,
     })) ?? [];
-  const activeVersion = history ? getLatestVersion(history) : null;
 
   const initialContent = activeVersion?.decryptedContent ?? "";
 
@@ -288,6 +359,35 @@ export function DocumentEditorController({
   );
   // Whether the last save was an auto-save (vs a manual save)
   const [wasAutoSaved, setWasAutoSaved] = useState(false);
+  // Display name of the author of the currently rendered version (who last
+  // edited), resolved from their kind-0 profile; "you" when it's the user.
+  const [lastEditName, setLastEditName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ev = activeVersion?.event;
+    if (!ev) {
+      setLastEditName(null);
+      return;
+    }
+    if (user?.pubkey && ev.pubkey === user.pubkey) {
+      setLastEditName("you");
+      return;
+    }
+    let cancelled = false;
+    setLastEditName(null);
+    (async () => {
+      const profile = await fetchProfile(ev.pubkey, relays).catch(() => null);
+      if (cancelled) return;
+      const name =
+        profile?.display_name ||
+        profile?.name ||
+        `${ev.pubkey.slice(0, 8)}…${ev.pubkey.slice(-4)}`;
+      setLastEditName(name as string);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeVersion?.event, user?.pubkey, relays]);
   const [focusMode, setFocusMode] = useState(false);
   const [focusAnimation, setFocusAnimation] = useState<"enter" | "exit" | null>(null);
   const [showFocusHint, setShowFocusHint] = useState(false);
@@ -344,6 +444,72 @@ export function DocumentEditorController({
     severity: "success" | "error";
   }>({ open: false, message: "", severity: "success" });
   const [shareOpen, setShareOpen] = useState(false);
+  const [shareMembers, setShareMembers] = useState<DocMember[]>([]);
+  const [shareMode, setShareMode] = useState<DocMode | undefined>(undefined);
+
+  // Load the v2 roster (members + mode) for the share dialog (owner only).
+  // Reuses the viewKey the owner already holds; no-ops for legacy/personal docs.
+  useEffect(() => {
+    if (!shareOpen || !isOwner || !viewKey || !selectedDocumentId) {
+      setShareMembers([]);
+      setShareMode(undefined);
+      return;
+    }
+    const parsed = selectedDocumentId.split(":");
+    if (parsed.length < 3) return;
+    const owner = parsed[1];
+    const d = parsed.slice(2).join(":");
+    let cancelled = false;
+    (async () => {
+      const roster = await fetchRoster(owner, d, viewKey, relays).catch(() => null);
+      if (!cancelled) {
+        setShareMembers(roster?.members ?? []);
+        setShareMode(roster?.mode);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shareOpen, isOwner, viewKey, selectedDocumentId, relays]);
+
+  const parseShareTarget = () => {
+    if (!selectedDocumentId) return null;
+    const [kindStr, owner, ...rest] = selectedDocumentId.split(":");
+    if (!owner || rest.length === 0) return null;
+    return { kind: Number(kindStr), owner, d: rest.join(":") };
+  };
+
+  const decodeEditorInput = (input: string): string | null => {
+    const value = input.trim();
+    if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
+    try {
+      const decoded = nip19.decode(value);
+      return decoded.type === "npub" ? decoded.data : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleAddEditor = async (input: string) => {
+    const target = parseShareTarget();
+    if (!target || !viewKey) throw new Error("Share this page first, then add editors.");
+    const hex = decodeEditorInput(input);
+    if (!hex) throw new Error("Enter a valid npub or 64-character hex pubkey.");
+    const next = upsertMember(shareMembers, hex, "editor");
+    await updateRosterMembers(target.owner, target.d, viewKey, next, relays, "restricted");
+    setShareMembers(next);
+    setShareMode("restricted");
+    setToast({ open: true, message: "Editor added.", severity: "success" });
+  };
+
+  const handleRemoveEditor = async (pubkey: string) => {
+    const target = parseShareTarget();
+    if (!target || !viewKey) throw new Error("This page isn't shared yet.");
+    const next = removeMember(shareMembers, pubkey);
+    await updateRosterMembers(target.owner, target.d, viewKey, next, relays);
+    setShareMembers(next);
+    setToast({ open: true, message: "Editor removed.", severity: "success" });
+  };
   const [publishTarget, setPublishTarget] = useState<"longform" | "communityNip" | null>(null);
   const [savingToShared, setSavingToShared] = useState(false);
   // Device-only state: for drafts tracked locally; for saved docs derived from context
@@ -416,12 +582,16 @@ export function DocumentEditorController({
   const isDraftRef = useRef(isDraft);
   const isViewOnlyRef = useRef(isViewOnly);
   const selectedDocIdRef = useRef(selectedDocumentId);
+  const isCollabDocRef = useRef(isCollabDoc);
+  const collabRef = useRef(collab);
 
   // Keep all synchronous refs current on every render
   modeRef.current = mode;
   isDraftRef.current = isDraft;
   isViewOnlyRef.current = isViewOnly;
   selectedDocIdRef.current = selectedDocumentId;
+  isCollabDocRef.current = isCollabDoc;
+  collabRef.current = collab;
 
   // Always-current upload function — avoids stale closures in editorProps handlers
   const uploadFileRef = useRef<(file: File) => Promise<void>>(async () => { });
@@ -452,7 +622,22 @@ export function DocumentEditorController({
   /* ── TipTap editor instance ────────────────────────────── */
   const editor = useEditor({
     extensions: [
-      StarterKit,
+      // Collaboration's plugin construction throws on a null/undefined document,
+      // so for solo docs (and collab docs still connecting) it — and
+      // CollaborationCaret — must be absent, not configured empty. StarterKit's
+      // undo/redo is incompatible with Collaboration, so only the collab path
+      // disables it.
+      isCollabReady ? StarterKit.configure({ undoRedo: false }) : StarterKit,
+      ...(isCollabReady && collab
+        ? [
+            collab.CollaborationExt.configure({ document: collab.ydoc }),
+            collab.CollaborationCaretExt.configure({
+              provider: collab.provider,
+              user: { sessionPubkey: collab.provider.sessionPubkey },
+              ...createCollaborationCaretRenderers(collaboratorsRef),
+            }),
+          ]
+        : []),
       TextStyle,
       FontFamily,
       // html: true so <encrypted-file> tags round-trip through markdown storage
@@ -647,17 +832,30 @@ export function DocumentEditorController({
         return true;
       },
     },
-    content: initialContent,
+    // Collab docs get their content from the Yjs doc (via Collaboration), not
+    // from the markdown snapshot.
+    content: isCollabReady ? undefined : initialContent,
+    // Editing is never blocked. While a collab session is still connecting the
+    // user edits the plain-markdown editor; those keystrokes live in mdRef and
+    // are carried into the shared doc by the seed effect when it becomes ready.
     editable: mode !== "preview",
     onUpdate: ({ editor }) => {
       // Only trust TipTap as the source of truth in WYSIWYG mode. Spurious
       // onUpdate calls fire during mode transitions (EditorContent remount,
       // setEditable dispatch) and would clobber textarea content with TipTap's
-      // stale internal document.
-      if (modeRef.current !== "edit") return;
+      // stale internal document. For collab docs the editor's content is the
+      // authoritative Yjs state (local AND remote changes), so we must also
+      // refresh the markdown snapshot in preview — otherwise a collaborator
+      // watching in preview never sees live edits.
+      if (modeRef.current !== "edit" && !isCollabDocRef.current) return;
       const newMd = getEditorMarkdown(editor);
       mdRef.current = newMd;
       setMd(newMd);
+      if (modeRef.current !== "edit") {
+        // Remote-driven change while in preview: the user made no local edit, so
+        // don't flag the document as having unsaved changes (or block navigation).
+        lastSavedMdRef.current = newMd;
+      }
       setWordCount(editor.storage.characterCount.words());
       setCharCount(editor.storage.characterCount.characters());
 
@@ -693,7 +891,9 @@ export function DocumentEditorController({
       // Cursor moved without typing — drop stale pending/shown suggestions.
       notifyCursorPosRef.current(selection.from);
     },
-  });
+    // Solo docs never change this dep (editor created once). Collab docs
+    // recreate the editor exactly once, when the session flips to ready.
+  }, [isCollabReady]);
 
   /* ── Sync word/char count on editor ready ──────────────── */
   useEffect(() => {
@@ -702,6 +902,28 @@ export function DocumentEditorController({
       setCharCount(editor.storage.characterCount.characters());
     }
   }, [editor]);
+
+  /* ── Seed a fresh Yjs doc from the existing snapshot ───── */
+  // A brand-new collab session's Y.Doc starts empty and the Collaboration
+  // extension can't know the pre-collab markdown snapshot. Give the initial
+  // sync-step round-trip a chance to pull a peer's history first (the
+  // isCollabReady grace period); only seed if the doc is still empty. The seed
+  // uses mdRef (the live editor markdown) rather than the original snapshot, so
+  // anything the user typed while the session was connecting is preserved. Runs
+  // at most once per editor instance so it never clobbers collaborators' content.
+  const seededCollabDocRef = useRef(false);
+  useEffect(() => {
+    seededCollabDocRef.current = false;
+  }, [editor]);
+  useEffect(() => {
+    if (!isCollabReady || !editor || seededCollabDocRef.current) return;
+    seededCollabDocRef.current = true;
+    if (editor.getText().trim()) return;
+    const seedSource = mdRef.current.trim() ? mdRef.current : initialContent;
+    if (seedSource.trim()) {
+      editor.commands.setContent(seedSource);
+    }
+  }, [isCollabReady, editor, initialContent]);
 
   const activeTextSuggestion = textSuggest.suggestion;
   const localAIPrefs = textSuggest.prefs;
@@ -1012,6 +1234,16 @@ export function DocumentEditorController({
       if (isViewOnlyRef.current) return;   // never save read-only views
       if (!mdRef.current.trim()) return;   // don't save blank content
       if (selectedDocIdRef.current !== armedDocId) return; // doc switched — abort
+      if (isCollabDocRef.current) {
+        // A partitioned/stale collab client shouldn't snapshot a regressed view
+        // over the others' work: only save when recently sync-stepped (kept fresh
+        // by the provider's periodic re-broadcast).
+        const provider = collabRef.current?.provider;
+        const synced =
+          !!provider?.lastSyncRequestAt &&
+          Date.now() - provider.lastSyncRequestAt <= RESYNC_FRESHNESS_MS;
+        if (!synced) return;
+      }
       handleSaveRef.current(true);         // silent = true (no toast)
     }, AUTO_SAVE_DELAY_MS);
 
@@ -1024,6 +1256,10 @@ export function DocumentEditorController({
       isFirstMount.current = false;
       return;
     }
+    // Collab docs get remote content via live Yjs merge, not via activeVersion
+    // changes — running this would clobber live-merged content with a lagging
+    // Markdown snapshot.
+    if (isCollabDocRef.current) return;
     if (!activeVersion) return;
     // Never clobber unsaved changes the user is currently editing
     if (mdRef.current !== lastSavedMdRef.current) return;
@@ -1128,6 +1364,18 @@ export function DocumentEditorController({
     localOnly = false,
   ) => {
     const dTag = address.split(":")?.[2];
+    // v2: the content event's `a` tag is the capability-derived room (not the
+    // root), so the owner is not named in the public footprint; it still lets a
+    // client find all versions (`#a`). Legacy readers ignore the extra tag.
+    const aTag = viewKey ? collabRoom(viewKey) : address;
+    const eventTags = [["d", dTag], ["a", aTag]];
+    // Relays drop replaceable events whose created_at is not strictly newer, and
+    // created_at has 1s granularity — so two saves in the same second (or a
+    // re-publish right after a save, e.g. sharing) would be silently discarded.
+    // Keep the timestamp strictly above this document's newest known version.
+    const prevAt = documents.get(address)?.versions.at(-1)?.event.created_at ?? 0;
+    const createdAt = nextContentCreatedAt(prevAt);
+    // Kind-33457 content is plain Markdown; Yjs is a live-only layer (not stored).
     const encryptedContent = await encryptContent(content, viewKey);
     if (!encryptedContent) throw new Error("Encryption failed");
 
@@ -1144,9 +1392,9 @@ export function DocumentEditorController({
         : await signer.getPublicKey();
       const template = {
         kind: KIND_FILE,
-        tags: [["d", dTag]],
+        tags: eventTags,
         content: encryptedContent,
-        created_at: Math.floor(Date.now() / 1000),
+        created_at: createdAt,
         pubkey,
       };
       stored = { ...template, id: getEventHash(template), sig: "" };
@@ -1154,9 +1402,9 @@ export function DocumentEditorController({
       stored = finalizeEvent(
         {
           kind: KIND_FILE,
-          tags: [["d", dTag]],
+          tags: eventTags,
           content: encryptedContent,
-          created_at: Math.floor(Date.now() / 1000),
+          created_at: createdAt,
         },
         hexToBytes(editKey),
       );
@@ -1165,14 +1413,19 @@ export function DocumentEditorController({
       if (!signer) throw new Error("No signer available");
       stored = await signer.signEvent({
         kind: KIND_FILE,
-        tags: [["d", dTag]],
+        tags: eventTags,
         content: encryptedContent,
-        created_at: Math.floor(Date.now() / 1000),
+        created_at: createdAt,
       });
     }
 
-    // 1. Update React state (in-memory, for immediate UI)
-    addDocument(stored, { viewKey, editKey });
+    // 1. Update React state (in-memory, for immediate UI). v2 group versions are
+    //    keyed by the root address so every author lands under one document.
+    addDocument(
+      stored,
+      { viewKey, editKey },
+      { documentId: address, owner: address.split(":")[1] },
+    );
 
     // 2. Cache the event in the local relay — the single owner of event
     //    payloads. Covers device-only (unsigned) events too, which are never
@@ -1282,6 +1535,20 @@ export function DocumentEditorController({
       setWasAutoSaved(silent);
       if (!silent) {
         setToast({ open: true, message: "Saved", severity: "success" });
+      }
+      // v2: a logged-in writer on someone else's shared document keeps their own
+      // fork and should be filed under their Shared list automatically once they
+      // save — no manual "Save to Shared" step. Skipped without a signer: a legacy
+      // edit-key editor may be anonymous, and addSharedDoc would prompt for login.
+      if (!isOwner && !!viewKey && canWrite && selectedDocumentId && user?.pubkey) {
+        if (getKeys(selectedDocumentId).length === 0) {
+          try {
+            await addSharedDoc([selectedDocumentId, viewKey]);
+            unmarkVisited(selectedDocumentId);
+          } catch (err) {
+            console.warn("Failed to auto-add shared doc:", err);
+          }
+        }
       }
     } catch (err) {
       lastSavedMdRef.current = prevSavedMd; // restore so unsaved indicator reappears
@@ -1648,13 +1915,13 @@ export function DocumentEditorController({
               color: "info.main",
             }}
           >
-            {editKey ? (
+            {canWrite ? (
               <EditOutlinedIcon sx={{ fontSize: 12 }} />
             ) : (
               <VisibilityOutlinedIcon sx={{ fontSize: 12 }} />
             )}
             <Typography variant="caption" sx={{ fontWeight: 600 }}>
-              Shared page · {editKey ? "edit access" : "view only"}
+              Shared page · {canWrite ? "edit access" : "view only"}
             </Typography>
           </Box>
         )}
@@ -1673,6 +1940,22 @@ export function DocumentEditorController({
               Device only
             </Typography>
           </Box>
+        )}
+        {isCollabDoc && (collaborators.size > 0 || !isCollabReady) && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            {!isCollabReady && (
+              <Typography variant="caption" color="text.secondary">
+                Connecting…
+              </Typography>
+            )}
+            <PresenceAvatars collaborators={collaborators} />
+          </Box>
+        )}
+        {activeVersion && (
+          <Typography variant="caption" color="text.secondary">
+            Last edit{lastEditName ? ` by ${lastEditName}` : ""} ·{" "}
+            {new Date(activeVersion.event.created_at * 1000).toLocaleString()}
+          </Typography>
         )}
         {hasUnsavedChanges ? (
           <Typography variant="caption" color="error.main" sx={{ fontWeight: 600 }}>
@@ -1893,7 +2176,12 @@ export function DocumentEditorController({
         }}
         existingViewLink={existingViewLink}
         existingEditLink={existingEditLink}
-        onPrivateLink={async (canEdit, rotate) => {
+        members={shareMembers}
+        onAddEditor={isOwner && viewKey ? handleAddEditor : undefined}
+        onRemoveEditor={isOwner && viewKey ? handleRemoveEditor : undefined}
+        v2={isOwner}
+        mode={shareMode}
+        onPrivateLink={async (canEdit, rotate, open) => {
           // Edit-access re-share: reuse the existing keys and skip publishing.
           // Republishing would push our stale local copy over any edits the
           // collaborator has made through the live shared link.
@@ -1908,6 +2196,54 @@ export function DocumentEditorController({
             const existing = getKeys(selectedDocumentId);
             if (existing[0]) {
               return buildShareUrl(selectedDocumentId, existing[0]);
+            }
+          }
+
+          // v2 group share (owner): keep the owner's own address, re-publish the
+          // content under the document viewKey and a roster. No editKey and no
+          // separate backup copy; only people added as editors can write.
+          if (canEdit && isOwner && selectedDocumentId && user?.pubkey) {
+            const target = parseShareTarget();
+            if (target) {
+              const vk = viewKey ?? bytesToHex(generateSecretKey());
+              const mode: DocMode = open ? "open" : "restricted";
+              // Make sure the viewKey-encrypted re-publish strictly supersedes the
+              // owner's last version (relays drop equal-or-older replaceables).
+              const lastAt = history?.versions.at(-1)?.event.created_at ?? 0;
+              const createdAt = nextContentCreatedAt(lastAt);
+              const sharedEvent = await enableGroupSharing(
+                target.owner,
+                target.d,
+                vk,
+                md,
+                relays,
+                open ? [] : shareMembers,
+                mode,
+                createdAt,
+              );
+              // Register the viewKey+version locally right away so this session's
+              // live/hydration paths decrypt the owner's own viewKey-encrypted
+              // events instead of attempting a self-decrypt.
+              await addDocument(
+                sharedEvent,
+                { viewKey: vk },
+                { documentId: selectedDocumentId, owner: target.owner },
+              );
+              setShareMode(mode);
+              // Adopt the viewKey so this session keeps encrypting with it.
+              // Mark the snapshot saved so the unsaved-changes blocker doesn't
+              // intercept the navigation.
+              lastSavedMdRef.current = md;
+              setLastSavedAt(new Date());
+              const naddr = nip19.naddrEncode({
+                kind: KIND_FILE,
+                pubkey: target.owner,
+                identifier: target.d,
+              });
+              navigate(`/doc/${naddr}#${encodeNKeys({ viewKey: vk })}`, {
+                replace: true,
+              });
+              return buildShareUrl(selectedDocumentId, vk);
             }
           }
 

@@ -28,6 +28,7 @@ import { publishEvent } from "../nostr/publish";
 import { encryptContent } from "../utils/encryption";
 import { makeTag } from "../utils/makeTag";
 import { subscribe, fetchCachedMany, fetchCachedByAddresses, resolveEventsByAddress, cacheLocalEvents, type Subscription } from "../dataLayer";
+import { authorSet, collabRoom, fetchRoster, isOpenRoster, parseRootAddress } from "../nostr/sharedDoc";
 import { saveFontResource } from "../lib/fontStore";
 import { registerFontFaceFromBlob } from "../lib/fontRegister";
 import { sha256Hex } from "../utils/fileEncryption";
@@ -39,6 +40,13 @@ type DocumentVersion = {
 
 type DocumentHistory = {
   versions: DocumentVersion[]; // sorted oldest → newest
+  /**
+   * Root pubkey that owns the document. For legacy single-author docs this is
+   * the author's own pubkey (derived from the event when absent); for v2 group
+   * docs it is the owner from the root address, which may differ from the
+   * pubkey of any individual version.
+   */
+  owner?: string;
 };
 
 interface DocumentContextValue {
@@ -53,6 +61,7 @@ interface DocumentContextValue {
   addDocument: (
     document: Event,
     keys?: { viewKey?: string; editKey?: string },
+    ref?: { documentId?: string; owner?: string },
   ) => Promise<void>;
 
   /**
@@ -103,8 +112,8 @@ const getDecryptedContent = async (
         hexToBytes(viewKey),
         getPublicKey(hexToBytes(viewKey)),
       );
-      const decryptedContent = nip44.decrypt(event.content, conversationKey);
-      return decryptedContent;
+      const plaintext = nip44.decrypt(event.content, conversationKey);
+      return plaintext;
     }
 
     // The signer manager waits for restore and opens the correct login/unlock flow.
@@ -117,7 +126,8 @@ const getDecryptedContent = async (
     if (!signer || !signer.nip44Decrypt) return null;
     const pubkey = await signer.getPublicKey();
     if (event.pubkey !== pubkey) return null;
-    return await signer.nip44Decrypt(pubkey, event.content);
+    const plaintext = await signer.nip44Decrypt(pubkey, event.content);
+    return plaintext;
   } catch (err) {
     console.error("Failed to decrypt content:", err);
     return null;
@@ -214,7 +224,7 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
       [...documents.entries()]
         .filter(([address, history]) => {
           if (deletedEventIds.has(address)) return false;
-          const pubkey = history.versions[0]?.event.pubkey;
+          const pubkey = history.owner ?? history.versions[0]?.event.pubkey;
           if (userPubkey) {
             return pubkey === userPubkey;
           }
@@ -223,6 +233,7 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
         .map(([address, history]): [string, DocumentHistory] => [
           address,
           {
+            owner: history.owner,
             versions: history.versions.filter(
               (v) => !deletedEventIds.has(v.event.id),
             ),
@@ -238,12 +249,13 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
         .filter(([address, history]) => {
           if (!sessionVisited.has(address)) return false;
           if (deletedEventIds.has(address)) return false;
-          const pubkey = history.versions[0]?.event.pubkey;
+          const pubkey = history.owner ?? history.versions[0]?.event.pubkey;
           return !userPubkey || pubkey !== userPubkey;
         })
         .map(([address, history]): [string, DocumentHistory] => [
           address,
           {
+            owner: history.owner,
             versions: history.versions.filter(
               (v) => !deletedEventIds.has(v.event.id),
             ),
@@ -257,21 +269,51 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
     async (
       document: Event,
       keys?: { viewKey?: string; editKey?: string },
+      ref?: { documentId?: string; owner?: string },
     ) => {
-      const address = getEventAddress(document);
-      if (!address) return;
+      const authorAddress = getEventAddress(document);
+      if (!authorAddress) return;
 
-      const cachedEntry = address ? localEntriesRef.current.get(address) : undefined;
-      const viewKey = keys?.viewKey ?? cachedEntry?.viewKey;
+      // v2 group docs are keyed by their root address so every author's version
+      // lives under one document. Legacy single-author docs keep keying by the
+      // author address (documentId === authorAddress), so behavior is unchanged.
+      let documentId = ref?.documentId ?? authorAddress;
+      let owner = ref?.owner ?? document.pubkey;
 
-      if (address && (keys?.viewKey || keys?.editKey)) {
-        const existing = localEntriesRef.current.get(address);
+      let cachedEntry = localEntriesRef.current.get(documentId);
+      let viewKey = keys?.viewKey ?? cachedEntry?.viewKey;
+      if (!viewKey) {
+        // A v2 event carries ["a", room] (a capability id, not the root). If we
+        // already hold that document's viewKey locally (e.g. the owner's own
+        // re-published event, or a participant's own author-slot write), use it
+        // instead of wrongly attempting a self-decrypt — and, when it is our own
+        // write for a group doc we know, key it under the group's root (not our
+        // own address) so the doc isn't duplicated as a personal page.
+        const eventRoom = document.tags.find((t) => t[0] === "a")?.[1];
+        const wantD = (eventRoom ?? documentId).split(":").slice(2).join(":");
+        for (const [addr, e] of localEntriesRef.current.entries()) {
+          if (!e.viewKey) continue;
+          const roomMatch = !!eventRoom && collabRoom(e.viewKey) === eventRoom;
+          const dMatch = addr.split(":").slice(2).join(":") === wantD;
+          if (!roomMatch && !dMatch) continue;
+          viewKey = e.viewKey;
+          if (roomMatch && !ref?.documentId && addr !== documentId) {
+            documentId = addr;
+            owner = addr.split(":")[1] || owner;
+            cachedEntry = e;
+          }
+          break;
+        }
+      }
+
+      if (keys?.viewKey || keys?.editKey) {
+        const existing = localEntriesRef.current.get(documentId);
         if (existing) {
           existing.viewKey = keys.viewKey ?? existing.viewKey;
           existing.editKey = keys.editKey ?? existing.editKey;
         } else {
-          localEntriesRef.current.set(address, {
-            address,
+          localEntriesRef.current.set(documentId, {
+            address: documentId,
             event: document,
             viewKey: keys.viewKey,
             editKey: keys.editKey,
@@ -286,10 +328,13 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
 
       setDocuments((prev) => {
         const next = new Map(prev);
-        const history = next.get(address) ?? {
-          address,
+        const history = next.get(documentId) ?? {
+          address: documentId,
           versions: [],
+          owner,
         };
+
+        if (!history.owner) history.owner = owner;
 
         const alreadyPresent = history.versions.some(
           (v) => v.event.id === document.id,
@@ -309,7 +354,7 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
           },
         ].sort((a, b) => a.event.created_at - b.event.created_at);
 
-        next.set(address, history);
+        next.set(documentId, history);
         return next;
       });
 
@@ -322,7 +367,8 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
             // tag format: ["font", family, url, format]
             const family = tag[1];
             const url = tag[2];
-            const format = (tag[3] as any) || "woff2";
+            const format =
+              (tag[3] as "woff2" | "woff" | "truetype" | "opentype") || "woff2";
             if (!url || !family) continue;
             try {
               // 1. Validate URL scheme
@@ -367,14 +413,14 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
               await saveFontResource({
                 family,
                 blob,
-                format: format as any,
+                format,
                 mimeType,
                 addedAt: Date.now(),
                 blossomUrl: url,
               });
               // register immediately so the UI shows the font without reload
               try {
-                registerFontFaceFromBlob(family, blob, format as any);
+                registerFontFaceFromBlob(family, blob, format);
               } catch (err) {
                 console.warn("Failed to register shared font immediately:", err);
               }
@@ -693,28 +739,85 @@ export const DocumentProvider: React.FC<{ children: React.ReactNode }> = ({
 
       // ── Phase 4: Live relay subscription ─────────────────
       if (isCancelled) return;
+
+      // Group documents the user owns: also subscribe to every authorized author
+      // so an editor's version lands in the owner's document live (previously
+      // only the owner's own slot was subscribed). Restored each session from the
+      // roster; open-mode docs subscribe by `#a`.
+      type GroupSub = { root: string; owner: string; viewKey: string; d: string; room: string };
+      const groupByRoom = new Map<string, GroupSub>();
+      const groupFilters: {
+        kinds: number[];
+        authors?: string[];
+        "#d"?: string[];
+        "#a"?: string[];
+      }[] = [];
+      for (const entry of localEntries) {
+        if (!entry.viewKey) continue;
+        const parsed = parseRootAddress(entry.address);
+        if (!parsed || parsed.owner !== pubkey) continue;
+        const room = collabRoom(entry.viewKey);
+        if (groupByRoom.has(room)) continue;
+        let roster;
+        try {
+          roster = await fetchRoster(parsed.owner, parsed.d, entry.viewKey, relays);
+        } catch {
+          roster = null;
+        }
+        if (isCancelled) return;
+        if (!roster) continue; // not a v2 group document
+        groupByRoom.set(room, {
+          root: entry.address,
+          owner: parsed.owner,
+          viewKey: entry.viewKey,
+          d: parsed.d,
+          room,
+        });
+        if (isOpenRoster(roster)) {
+          groupFilters.push({ kinds: [KIND_FILE], "#a": [room] });
+        } else {
+          groupFilters.push({
+            kinds: [KIND_FILE],
+            authors: authorSet(parsed.owner, roster),
+            "#d": [parsed.d],
+          });
+        }
+      }
+
       liveSub = subscribe(
-        [{ kinds: [KIND_FILE], authors: [pubkey] }],
+        [{ kinds: [KIND_FILE], authors: [pubkey] }, ...groupFilters],
         {
           onEvent: async (event: Event) => {
             if (isCancelled) return;
             const addr = getEventAddress(event);
-            if (addr) {
+            // v2 group versions carry ["a", room]; route them under the root so
+            // every author lands in the owner's single document.
+            const eventRoom = event.tags.find((t) => t[0] === "a")?.[1];
+            const group = eventRoom ? groupByRoom.get(eventRoom) : undefined;
+            const documentId = group?.root ?? addr;
+            if (documentId) {
               setLocalOnlyAddresses((prev) => {
-                if (!prev.has(addr)) return prev;
+                if (!prev.has(documentId)) return prev;
                 const next = new Set(prev);
-                next.delete(addr);
+                next.delete(documentId);
                 return next;
               });
             }
-            const localEntry = addr ? localEntriesRef.current.get(addr) : undefined;
-            const viewKey = localEntry?.viewKey;
+            const localEntry = documentId
+              ? localEntriesRef.current.get(documentId)
+              : undefined;
+            const viewKey = group?.viewKey ?? localEntry?.viewKey;
             const editKey = localEntry?.editKey;
+            const owner = group?.owner ?? event.pubkey;
 
-            await addDocument(event, { viewKey, editKey });
-            if (addr) {
+            await addDocument(
+              event,
+              { viewKey, editKey },
+              group ? { documentId: group.root, owner } : undefined,
+            );
+            if (documentId) {
               saveLocalDocState({
-                address: addr,
+                address: documentId,
                 viewKey,
                 editKey,
                 pendingBroadcast: false,

@@ -20,6 +20,24 @@ export const KIND_CRDT_OP = 22457;
 export const KIND_DOC_METADATA = 34579;
 
 /**
+ * Ephemeral presence/awareness events (cursor position, active collaborators).
+ * Content is NIP-44 encrypted (viewKey conversation key) base64-encoded
+ * y-protocols/awareness updates. Signed by a per-tab session key. Uses
+ * tag: ["a", <root address>].
+ */
+export const KIND_PRESENCE = 24578;
+
+/**
+ * Binds a per-tab collaboration session key to the real pubkey behind it. This
+ * event is NOT published; it is the token embedded in the (viewKey-encrypted)
+ * payload of each CRDT op / presence event, so relays never see the real key.
+ * Uses tag: ["d", "<room>:<sessionPubkey>"]
+ * Content is plaintext JSON { realPubkey, expiresAt } (it is already inside an
+ * encrypted payload).
+ */
+export const KIND_SESSION_ATTESTATION = 34581;
+
+/**
  * Private encrypted inline comment anchored to a document.
  * Non-replaceable: comments accumulate.
  * Content is NIP-44 encrypted (viewKey conversation key) flat tag array.
