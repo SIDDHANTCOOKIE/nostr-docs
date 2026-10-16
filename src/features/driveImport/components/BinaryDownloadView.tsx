@@ -61,9 +61,7 @@ export const BinaryDownloadView: React.FC<BinaryDownloadViewProps> = ({
           fontSize: "28px",
         }}
         aria-hidden="true"
-      >
-        📄
-      </div>
+      />
 
       <h2
         style={{
@@ -102,7 +100,7 @@ export const BinaryDownloadView: React.FC<BinaryDownloadViewProps> = ({
           onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#1d4ed8")}
           onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#2563eb")}
         >
-          ⬇️ Download File
+          Download File
         </button>
 
         {onBackToDocs && (
@@ -120,7 +118,7 @@ export const BinaryDownloadView: React.FC<BinaryDownloadViewProps> = ({
             onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#f9fafb")}
             onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
           >
-            ← Back to docs
+            Back to docs
           </button>
         )}
       </div>

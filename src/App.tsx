@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect } from "react";
+import { nip19 } from "nostr-tools";
 import "./App.css";
 import {
   Box,
@@ -60,23 +61,61 @@ function ArticleViewWrapper() {
 
 function DriveImportPageWrapper() {
   const navigate = useNavigate();
-  const { addImportedDocument } = useDocumentContext();
+  const { addImportedDocument, visibleDocuments } = useDocumentContext();
 
   const handleOpenInEditor = async (
     _docId: string,
     _title: string,
     content: string | Record<string, unknown>,
   ) => {
+    // One Pages document per Drive file: remember which address a blob became.
+    const payload = getActiveImportPayload();
+    const sourceKey = payload
+      ? `${payload.server}|${payload.blobHash ?? payload.chunks?.map((c) => c.hash).join(",") ?? payload.name}`
+      : null;
+    const storeKey = "drive_import_addresses";
+    const readMap = (): Record<string, string> => {
+      try {
+        return JSON.parse(localStorage.getItem(storeKey) ?? "{}");
+      } catch {
+        return {};
+      }
+    };
+    const toPath = (address: string) => {
+      const [kind, pubkey, identifier] = address.split(":");
+      return `/doc/${nip19.naddrEncode({ kind: Number(kind), pubkey, identifier })}`;
+    };
+
     try {
+      const existing = sourceKey ? readMap()[sourceKey] : undefined;
+      if (existing && visibleDocuments.has(existing)) {
+        clearActiveImportPayload();
+        navigate(toPath(existing));
+        return;
+      }
+
       const textContent =
         typeof content === "string" ? content : JSON.stringify(content);
-      const address = await addImportedDocument(textContent, { publish: true });
+      const address = await addImportedDocument(textContent, {
+        publish: true,
+        awaitBroadcast: false,
+      });
+      if (sourceKey) {
+        try {
+          localStorage.setItem(storeKey, JSON.stringify({ ...readMap(), [sourceKey]: address }));
+        } catch {
+          /* storage unavailable: worst case a re-open makes a new copy */
+        }
+      }
       clearActiveImportPayload();
-      navigate(`/doc/${address}`);
+      navigate(toPath(address));
     } catch (e) {
       console.error("Failed to import doc into editor", e);
-      clearActiveImportPayload();
-      navigate("/doc/new");
+      window.alert(
+        e instanceof Error && e.message
+          ? `Could not open in editor: ${e.message}`
+          : "Could not open in editor. Sign in and try again.",
+      );
     }
   };
 
@@ -96,13 +135,26 @@ function DriveImportPageWrapper() {
   );
 }
 
+// A stored payload only resumes a reload/back-forward of the import view, never a fresh visit to "/".
+const navEntryType = (
+  typeof performance !== "undefined" && performance.getEntriesByType
+    ? (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)
+    : undefined
+)?.type;
+const canResumeStoredImport = navEntryType === "reload" || navEntryType === "back_forward";
+
 export function HomePage() {
   const location = useLocation();
+  const resumeStored = canResumeStoredImport && location.key === "default";
   const hasPayload =
     location.hash.toLowerCase().startsWith("#payload=") ||
     location.search.toLowerCase().includes("payload=") ||
     (location.search.toLowerCase().includes("server=") && location.search.toLowerCase().includes("hash=")) ||
-    Boolean(getActiveImportPayload());
+    (resumeStored && Boolean(getActiveImportPayload()));
+
+  useEffect(() => {
+    if (!hasPayload) clearActiveImportPayload();
+  }, [hasPayload]);
 
   if (hasPayload) {
     return <DriveImportPageWrapper />;

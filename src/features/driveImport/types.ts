@@ -252,6 +252,8 @@ export interface DocumentImportResult {
   format: "markdown" | "html" | "text" | "tiptap-json";
   /** Sanitized HTML content string ready for editor.commands.setContent() */
   htmlContent: string;
+  /** Markdown the Pages editor stores documents as (title heading first) */
+  markdown: string;
   /** TipTap / ProseMirror JSON document tree */
   tiptapJson: TipTapDocNode;
   /** Normalized raw text content */

@@ -9,7 +9,7 @@
  * - Error card with "Back to docs" button when links are malformed or missing
  */
 
-import React, { useState } from "react";
+import React from "react";
 import { useDriveImport } from "../hooks/useDriveImport";
 import { ImportLoadingState } from "./ImportLoadingState";
 import { MediaPreviewModal } from "./MediaPreviewModal";
@@ -29,7 +29,6 @@ export const DriveImportPage: React.FC<DriveImportPageProps> = ({
 }) => {
   const { status, decryptedFile, importedDocument, error, progress, retry, downloadFile } =
     useDriveImport();
-  const [showRawText, setShowRawText] = useState(false);
 
   // 1. Loading States (parsing, fetching, decrypting, reassembling, verifying)
   if (
@@ -82,9 +81,10 @@ export const DriveImportPage: React.FC<DriveImportPageProps> = ({
             justifyContent: "center",
             margin: "0 auto 16px auto",
             fontSize: "24px",
+            fontWeight: 700,
           }}
         >
-          ⚠️
+          !
         </div>
         <h2 style={{ fontSize: "20px", fontWeight: "600", color: "#111827", margin: "0 0 8px 0" }}>
           {errorDetails.title}
@@ -121,7 +121,7 @@ export const DriveImportPage: React.FC<DriveImportPageProps> = ({
               cursor: "pointer",
             }}
           >
-            ← {errorDetails.actionGuidance || "Back to docs"}
+            {errorDetails.actionGuidance || "Back to docs"}
           </button>
         </div>
       </div>
@@ -134,127 +134,102 @@ export const DriveImportPage: React.FC<DriveImportPageProps> = ({
 
     // Case A: Collaborative Document (Markdown, Plain Text, HTML, DOCX)
     if (classification.isDocument && importedDocument) {
+      const buttonBase = {
+        padding: "9px 18px",
+        borderRadius: "8px",
+        fontSize: "14px",
+        fontWeight: 500,
+        cursor: "pointer",
+        whiteSpace: "nowrap" as const,
+      };
       return (
         <div
           style={{
-            maxWidth: "680px",
-            margin: "48px auto",
-            padding: "36px",
-            backgroundColor: "#ffffff",
-            borderRadius: "16px",
-            boxShadow: "0 10px 40px rgba(0, 0, 0, 0.08)",
+            maxWidth: "860px",
+            width: "100%",
+            margin: "32px auto",
+            padding: "0 20px",
+            boxSizing: "border-box",
             fontFamily: "system-ui, -apple-system, sans-serif",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "20px" }}>
-            <div
-              style={{
-                width: "48px",
-                height: "48px",
-                borderRadius: "12px",
-                backgroundColor: "#eff6ff",
-                color: "#2563eb",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "24px",
-              }}
-            >
-              📝
-            </div>
-            <div>
-              <h2 style={{ fontSize: "20px", fontWeight: "600", color: "#111827", margin: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: "12px 20px",
+              marginBottom: "16px",
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <h2
+                style={{
+                  fontSize: "20px",
+                  fontWeight: 600,
+                  color: "#111827",
+                  margin: "0 0 2px 0",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
                 {importedDocument.title}
               </h2>
               <span style={{ fontSize: "13px", color: "#6b7280" }}>
-                {importedDocument.wordCount} words • {importedDocument.characterCount} characters •{" "}
-                {importedDocument.format.toUpperCase()}
+                {importedDocument.wordCount.toLocaleString()} words · Imported from Formstr Drive
               </span>
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                onClick={downloadFile}
+                style={{
+                  ...buttonBase,
+                  backgroundColor: "#ffffff",
+                  color: "#374151",
+                  border: "1px solid #d1d5db",
+                }}
+              >
+                Download
+              </button>
+              <button
+                onClick={() => {
+                  if (onOpenInEditor) {
+                    onOpenInEditor(
+                      importedDocument.docId,
+                      importedDocument.title,
+                      importedDocument.markdown,
+                    );
+                  }
+                }}
+                style={{
+                  ...buttonBase,
+                  backgroundColor: "#2563eb",
+                  color: "#ffffff",
+                  border: "1px solid #2563eb",
+                }}
+              >
+                Open in editor
+              </button>
             </div>
           </div>
 
-          <p style={{ fontSize: "14px", color: "#4b5563", lineHeight: "1.6", marginBottom: "24px" }}>
-            This document was shared from Formstr Drive and decrypted locally. You can import it into
-            the TipTap editor to collaborate, or download the original file.
-          </p>
-
-          <div style={{ display: "flex", gap: "12px", marginBottom: "20px" }}>
-            <button
-              onClick={() => {
-                if (onOpenInEditor) {
-                  onOpenInEditor(
-                    importedDocument.docId,
-                    importedDocument.title,
-                    importedDocument.htmlContent || (importedDocument.tiptapJson as unknown as Record<string, unknown>),
-                  );
-                } else {
-                  // Fallback: copy or notify
-                  window.location.href = `/doc/${importedDocument.docId}`;
-                }
-              }}
-              style={{
-                flex: 1,
-                padding: "12px 24px",
-                backgroundColor: "#2563eb",
-                color: "#ffffff",
-                border: "none",
-                borderRadius: "8px",
-                fontSize: "15px",
-                fontWeight: "500",
-                cursor: "pointer",
-              }}
-            >
-              ✏️ Open in Document Editor
-            </button>
-            <button
-              onClick={downloadFile}
-              style={{
-                padding: "12px 20px",
-                backgroundColor: "#f3f4f6",
-                color: "#374151",
-                border: "1px solid #d1d5db",
-                borderRadius: "8px",
-                fontSize: "14px",
-                cursor: "pointer",
-              }}
-            >
-              ⬇️ Save File
-            </button>
-          </div>
-
-          <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: "16px" }}>
-            <button
-              onClick={() => setShowRawText((prev) => !prev)}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#2563eb",
-                fontSize: "13px",
-                cursor: "pointer",
-                padding: 0,
-                marginBottom: "12px",
-              }}
-            >
-              {showRawText ? "▲ Hide Content Preview" : "▼ Show Content Preview"}
-            </button>
-            {showRawText && (
-              <pre
-                style={{
-                  maxHeight: "300px",
-                  overflowY: "auto",
-                  padding: "16px",
-                  backgroundColor: "#f9fafb",
-                  borderRadius: "8px",
-                  fontSize: "13px",
-                  color: "#374151",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                }}
-              >
-                {importedDocument.rawText}
-              </pre>
-            )}
-          </div>
+          <iframe
+            title="Document preview"
+            sandbox=""
+            srcDoc={`<!doctype html><meta charset="utf-8"><style>body{font:15px/1.65 Georgia,'Times New Roman',serif;color:#1f2937;margin:0;padding:32px 40px}h1,h2,h3{font-family:system-ui,sans-serif;line-height:1.25}table{border-collapse:collapse;width:100%;margin:12px 0}td,th{border:1px solid #d1d5db;padding:6px 10px;vertical-align:top}p{margin:0 0 .8em}</style>${importedDocument.htmlContent}`}
+            style={{
+              display: "block",
+              width: "100%",
+              height: "calc(100vh - 150px)",
+              minHeight: "360px",
+              border: "1px solid #e5e7eb",
+              borderRadius: "10px",
+              backgroundColor: "#ffffff",
+              boxShadow: "0 1px 3px rgba(0, 0, 0, 0.06)",
+            }}
+          />
         </div>
       );
     }

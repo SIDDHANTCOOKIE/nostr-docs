@@ -104,7 +104,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
               cursor: "pointer",
             }}
           >
-            ⬇️ Download
+            Download
           </button>
           {onBackToDocs && (
             <button
@@ -195,8 +195,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
               maxWidth: "500px",
             }}
           >
-            <div style={{ fontSize: "48px", marginBottom: "16px" }}>🎵</div>
-            <p style={{ color: "#ffffff", marginBottom: "16px", fontSize: "16px" }}>
+                        <p style={{ color: "#ffffff", marginBottom: "16px", fontSize: "16px" }}>
               {file.name}
             </p>
             <audio src={blobUrl} controls style={{ width: "100%" }} />

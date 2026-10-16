@@ -16,6 +16,8 @@ import {
   type TipTapNode,
 } from "../types";
 import { classifyDriveFile } from "./mimeClassifier";
+import { convertDocxToDocument } from "./docxConverter";
+import { htmlToMarkdown } from "./htmlToMarkdown";
 
 /**
  * Strips path components and document file extensions to derive a clean display title.
@@ -428,230 +430,6 @@ export function convertHtmlToDocument(htmlText: string, _title?: string): {
 }
 
 /**
- * Lightweight ZIP extractor for locating and extracting files from unencrypted .docx archives.
- */
-async function extractZipEntry(zipBytes: Uint8Array, entryName: string): Promise<Uint8Array | null> {
-  const len = zipBytes.length;
-  let offset = 0;
-
-  while (offset + 30 <= len) {
-    // Check for local file header signature: 0x04034b50 (PK\x03\x04)
-    if (
-      zipBytes[offset] === 0x50 &&
-      zipBytes[offset + 1] === 0x4b &&
-      zipBytes[offset + 2] === 0x03 &&
-      zipBytes[offset + 3] === 0x04
-    ) {
-      const compression = zipBytes[offset + 8] | (zipBytes[offset + 9] << 8);
-      const compressedSize =
-        zipBytes[offset + 18] |
-        (zipBytes[offset + 19] << 8) |
-        (zipBytes[offset + 20] << 16) |
-        (zipBytes[offset + 21] << 24);
-      const fileNameLen = zipBytes[offset + 26] | (zipBytes[offset + 27] << 8);
-      const extraLen = zipBytes[offset + 28] | (zipBytes[offset + 29] << 8);
-
-      const nameStart = offset + 30;
-      const nameEnd = nameStart + fileNameLen;
-      if (nameEnd > len) break;
-
-      const currentName = new TextDecoder().decode(zipBytes.subarray(nameStart, nameEnd));
-      const dataStart = nameEnd + extraLen;
-      const dataEnd = dataStart + compressedSize;
-
-      if (currentName === entryName) {
-        if (dataEnd > len) break;
-        const compressedData = zipBytes.subarray(dataStart, dataEnd);
-
-        if (compression === 0) {
-          // Stored uncompressed
-          return compressedData;
-        }
-
-        if (compression === 8) {
-          // Deflate compression
-          if (typeof DecompressionStream !== "undefined") {
-            try {
-              const ds = new DecompressionStream("deflate-raw");
-              const stream = new Response(new Blob([compressedData as unknown as BlobPart]).stream().pipeThrough(ds));
-              const buf = await stream.arrayBuffer();
-              return new Uint8Array(buf);
-            } catch {
-              // Try standard deflate stream
-              try {
-                const ds = new DecompressionStream("deflate");
-                const stream = new Response(new Blob([compressedData as unknown as BlobPart]).stream().pipeThrough(ds));
-                const buf = await stream.arrayBuffer();
-                return new Uint8Array(buf);
-              } catch {
-                return null;
-              }
-            }
-          }
-        }
-        return null;
-      }
-
-      offset = dataEnd;
-    } else {
-      offset++;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Converts a Microsoft Word DOCX binary byte array into clean HTML and TipTap document model.
- */
-export async function convertDocxToDocument(
-  docxBytes: Uint8Array,
-  title?: string,
-): Promise<{
-  htmlContent: string;
-  tiptapJson: TipTapDocNode;
-  rawText: string;
-}> {
-  if (!docxBytes || docxBytes.length === 0) {
-    throw new DriveImportError(
-      "CORRUPTED_DOCUMENT",
-      "DOCX file is empty (0 bytes)",
-      "File contains no data",
-      "Corrupted Document",
-      "file",
-    );
-  }
-
-  // Check for ZIP magic bytes: PK\x03\x04
-  if (docxBytes.length < 4 || docxBytes[0] !== 0x50 || docxBytes[1] !== 0x4b) {
-    throw new DriveImportError(
-      "CORRUPTED_DOCUMENT",
-      "Invalid DOCX file format: missing standard ZIP archive header",
-      "The Word document is corrupted or not a valid .docx file",
-      "Corrupted Document",
-      "file",
-    );
-  }
-
-  // Attempt to extract word/document.xml
-  const xmlBytes = await extractZipEntry(docxBytes, "word/document.xml");
-
-  if (!xmlBytes) {
-    // If DecompressionStream is unavailable or document.xml not found,
-    // scan for text segments or fallback to placeholder
-    const textDecoder = new TextDecoder("utf-8", { fatal: false });
-    const rawXml = textDecoder.decode(docxBytes);
-    const textMatches = rawXml.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
-
-    if (textMatches && textMatches.length > 0) {
-      const extractedText = textMatches
-        .map((m) => m.replace(/<[^>]*>/g, ""))
-        .join(" ")
-        .trim();
-      return convertPlainTextToDocument(extractedText, title);
-    }
-
-    throw new DriveImportError(
-      "CORRUPTED_DOCUMENT",
-      "Unable to read Word document contents from DOCX archive",
-      "The document may be encrypted, password protected, or corrupted",
-      "Corrupted Document",
-      "file",
-    );
-  }
-
-  const xmlStr = new TextDecoder().decode(xmlBytes);
-
-  // Parse paragraphs <w:p>
-  const docContent: TipTapNode[] = [];
-  const htmlParts: string[] = [];
-  const textParts: string[] = [];
-
-  // Match all <w:p>...</w:p> blocks
-  const pRegex = /<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g;
-  let pMatch: RegExpExecArray | null;
-
-  while ((pMatch = pRegex.exec(xmlStr)) !== null) {
-    const pXml = pMatch[1];
-
-    // Detect heading style (e.g. <w:pStyle w:val="Heading1"/>)
-    const styleMatch = pXml.match(/<w:pStyle\s+[^>]*w:val="Heading(\d)"/i);
-    const headingLevel = styleMatch ? Number(styleMatch[1]) : 0;
-
-    // Extract runs <w:r>
-    const runRegex = /<w:r\b[^>]*>([\s\S]*?)<\/w:r>/g;
-    let rMatch: RegExpExecArray | null;
-    const inlineNodes: TipTapNode[] = [];
-    const inlineHtmlParts: string[] = [];
-    let pText = "";
-
-    while ((rMatch = runRegex.exec(pXml)) !== null) {
-      const rXml = rMatch[1];
-      const isBold = /<w:b(\s*\/|>|\s+[^>]*\/>)/.test(rXml);
-      const isItalic = /<w:i(\s*\/|>|\s+[^>]*\/>)/.test(rXml);
-
-      // Extract text <w:t>...</w:t>
-      const tMatch = rXml.match(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/);
-      if (tMatch && tMatch[1]) {
-        const text = tMatch[1];
-        pText += text;
-
-        const marks: Array<{ type: string }> = [];
-        let rHtml = escapeHtml(text);
-
-        if (isBold) {
-          marks.push({ type: "bold" });
-          rHtml = `<strong>${rHtml}</strong>`;
-        }
-        if (isItalic) {
-          marks.push({ type: "italic" });
-          rHtml = `<em>${rHtml}</em>`;
-        }
-
-        inlineNodes.push({
-          type: "text",
-          text,
-          marks: marks.length > 0 ? marks : undefined,
-        });
-        inlineHtmlParts.push(rHtml);
-      }
-    }
-
-    if (pText.trim().length > 0) {
-      textParts.push(pText.trim());
-
-      if (headingLevel >= 1 && headingLevel <= 6) {
-        docContent.push({
-          type: "heading",
-          attrs: { level: headingLevel },
-          content: inlineNodes,
-        });
-        htmlParts.push(`<h${headingLevel}>${inlineHtmlParts.join("")}</h${headingLevel}>`);
-      } else {
-        docContent.push({
-          type: "paragraph",
-          content: inlineNodes,
-        });
-        htmlParts.push(`<p>${inlineHtmlParts.join("")}</p>`);
-      }
-    }
-  }
-
-  if (docContent.length === 0) {
-    docContent.push({ type: "paragraph", content: [] });
-    htmlParts.push("<p></p>");
-  }
-
-  const rawText = textParts.join("\n\n");
-
-  return {
-    htmlContent: htmlParts.join(""),
-    tiptapJson: { type: "doc", content: docContent },
-    rawText,
-  };
-}
-
-/**
  * Universal entrance point: converts a DecryptedDriveFile into a complete DocumentImportResult
  * ready for TipTap editor opening and collaborative document synchronization.
  */
@@ -683,7 +461,7 @@ export async function convertDriveFileToDocument(
 
   switch (subtype) {
     case "docx":
-      converted = await convertDocxToDocument(file.data, title);
+      converted = await convertDocxToDocument(file.data);
       break;
     case "markdown": {
       const text = new TextDecoder("utf-8").decode(file.data);
@@ -706,9 +484,20 @@ export async function convertDriveFileToDocument(
   const words = converted.rawText.trim() ? converted.rawText.trim().split(/\s+/).length : 0;
   const chars = converted.rawText.length;
 
+  const bodyMarkdown =
+    subtype === "docx" || subtype === "html"
+      ? htmlToMarkdown(converted.htmlContent)
+      : converted.rawText;
+  const markdown = /^#{1,6}\s/.test(bodyMarkdown)
+    ? bodyMarkdown
+    : `# ${title}
+
+${bodyMarkdown}`;
+
   return {
     docId,
     title,
+    markdown,
     format: subtype === "markdown" ? "markdown" : subtype === "html" ? "html" : "text",
     htmlContent: converted.htmlContent,
     tiptapJson: converted.tiptapJson,
