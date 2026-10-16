@@ -21,7 +21,13 @@ import { UserProvider, useUser } from "./contexts/UserContext";
 import { ThemeModeProvider } from "./contexts/ThemeModeContext";
 import DocPage from "./components/DocPage";
 import ArticleView from "./components/ArticleView";
-import { DriveImportPage } from "./features/driveImport/components/DriveImportPage";
+import {
+  DriveImportPage,
+} from "./features/driveImport/components/DriveImportPage";
+import {
+  clearActiveImportPayload,
+  getActiveImportPayload,
+} from "./features/driveImport/hooks/useDriveImport";
 import { SharedPagesProvider } from "./contexts/SharedDocsContext";
 import { RelayProvider } from "./contexts/RelayContext";
 import { DocMetadataProvider } from "./contexts/DocMetadataContext";
@@ -65,16 +71,26 @@ function DriveImportPageWrapper() {
       const textContent =
         typeof content === "string" ? content : JSON.stringify(content);
       const address = await addImportedDocument(textContent, { publish: true });
+      clearActiveImportPayload();
       navigate(`/doc/${address}`);
     } catch (e) {
       console.error("Failed to import doc into editor", e);
+      clearActiveImportPayload();
       navigate("/doc/new");
     }
   };
 
+  const handleBackToDocs = () => {
+    clearActiveImportPayload();
+    if (typeof window !== "undefined" && window.location.hash) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    navigate("/", { replace: true });
+  };
+
   return (
     <DriveImportPage
-      onBackToDocs={() => navigate("/")}
+      onBackToDocs={handleBackToDocs}
       onOpenInEditor={handleOpenInEditor}
     />
   );
@@ -83,9 +99,10 @@ function DriveImportPageWrapper() {
 export function HomePage() {
   const location = useLocation();
   const hasPayload =
-    location.hash.startsWith("#payload=") ||
-    location.search.includes("payload=") ||
-    (location.search.includes("server=") && location.search.includes("hash="));
+    location.hash.toLowerCase().startsWith("#payload=") ||
+    location.search.toLowerCase().includes("payload=") ||
+    (location.search.toLowerCase().includes("server=") && location.search.toLowerCase().includes("hash=")) ||
+    Boolean(getActiveImportPayload());
 
   if (hasPayload) {
     return <DriveImportPageWrapper />;

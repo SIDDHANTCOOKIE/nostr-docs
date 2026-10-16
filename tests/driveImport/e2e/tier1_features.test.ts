@@ -1,4 +1,5 @@
 /**
+ * @vitest-environment happy-dom
  * tests/driveImport/e2e/tier1_features.test.ts
  * Tier 1: Comprehensive Feature Requirements Verification (55 Tests).
  * Exactly 5 test cases per identified feature across features 1 to 11.

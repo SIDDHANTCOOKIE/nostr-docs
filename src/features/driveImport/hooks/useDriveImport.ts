@@ -46,6 +46,31 @@ export interface UseDriveImportReturn {
   downloadFile: () => void;
 }
 
+let activeImportPayload: NormalizedDrivePayload | null = null;
+
+export function clearActiveImportPayload(): void {
+  activeImportPayload = null;
+  if (typeof sessionStorage !== "undefined") {
+    try {
+      sessionStorage.removeItem("active_drive_payload");
+    } catch {}
+  }
+}
+
+export function getActiveImportPayload(): NormalizedDrivePayload | null {
+  if (activeImportPayload) return activeImportPayload;
+  if (typeof sessionStorage !== "undefined") {
+    try {
+      const stored = sessionStorage.getItem("active_drive_payload");
+      if (stored) {
+        activeImportPayload = JSON.parse(stored) as NormalizedDrivePayload;
+        return activeImportPayload;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 export function useDriveImport(options?: UseDriveImportOptions): UseDriveImportReturn {
   const [status, setStatus] = useState<ImportStateStatus>("idle");
   const [payload, setPayload] = useState<NormalizedDrivePayload | null>(null);
@@ -70,26 +95,38 @@ export function useDriveImport(options?: UseDriveImportOptions): UseDriveImportR
     setError(null);
     setProgress(null);
 
-    let parsed: NormalizedDrivePayload;
+    let parsed: NormalizedDrivePayload | null = null;
     try {
       parsed = parseDrivePayload(window.location.href);
-      setPayload(parsed);
+      activeImportPayload = parsed;
+      if (typeof sessionStorage !== "undefined") {
+        try {
+          sessionStorage.setItem("active_drive_payload", JSON.stringify(parsed));
+        } catch {}
+      }
 
       if (options?.autoSanitizeUrl !== false) {
         sanitizeDriveImportUrl();
       }
     } catch (parseErr) {
-      const err =
-        parseErr instanceof DriveImportError
-          ? parseErr
-          : new DriveImportError(
-              "MALFORMED_URL",
-              parseErr instanceof Error ? parseErr.message : "Failed to parse import link",
-            );
-      setError(err);
-      setStatus("error");
-      return;
+      const fallback = getActiveImportPayload();
+      if (fallback) {
+        parsed = fallback;
+      } else {
+        const err =
+          parseErr instanceof DriveImportError
+            ? parseErr
+            : new DriveImportError(
+                "MALFORMED_URL",
+                parseErr instanceof Error ? parseErr.message : "Failed to parse import link",
+              );
+        setError(err);
+        setStatus("error");
+        return;
+      }
     }
+
+    setPayload(parsed);
 
     try {
       const decrypted = await fetchAndDecryptDriveFile(parsed, {

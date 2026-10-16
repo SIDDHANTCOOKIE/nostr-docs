@@ -94,7 +94,7 @@ export function tryUnwrapLegacyBase64(bytes: Uint8Array, expectedSize?: number):
   }
 
   try {
-    const text = new TextDecoder().decode(bytes).trim();
+    const text = new TextDecoder().decode(bytes).replace(/\s+/g, "");
     // Only attempt if text looks like base64 and length is multiple of 4
     if (/^[A-Za-z0-9+/=]+$/.test(text) && text.length % 4 === 0) {
       const decodedStr = atob(text);

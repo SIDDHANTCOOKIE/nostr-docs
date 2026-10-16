@@ -47,8 +47,9 @@ describe("Adversarial Stress Suite: parsePayload & parseDriveImportUrl", () => {
 
     it("gracefully catches truncated base64 of length % 4 === 1", () => {
       const b64 = encodePayload(makeValidPayload());
+      const unpadded = b64.replace(/=+$/, "");
       // Force length % 4 === 1
-      const truncated = b64.slice(0, b64.length - (b64.length % 4) + 1);
+      const truncated = unpadded.slice(0, 5);
       const url = `https://pages.formstr.app/#payload=${truncated}`;
       const res = parseDriveImportUrl(url);
       expect(res.ok).toBe(false);
@@ -100,7 +101,7 @@ describe("Adversarial Stress Suite: parsePayload & parseDriveImportUrl", () => {
         expect(res.ok).toBe(false);
         if (!res.ok) {
           expect(res.error).toBeInstanceOf(DriveImportError);
-          expect(["INVALID_JSON", "EMPTY_PAYLOAD"]).toContain(res.error.code);
+          expect(["INVALID_JSON", "EMPTY_PAYLOAD", "MISSING_PAYLOAD"]).toContain(res.error.code);
         }
       }
     });

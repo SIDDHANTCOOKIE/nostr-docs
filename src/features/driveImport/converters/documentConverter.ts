@@ -38,7 +38,8 @@ export function sanitizeDocumentTitle(fileName?: string): string {
     "",
   ).trim();
 
-  return stripped.length > 0 ? stripped : "Untitled Document (Imported)";
+  const cleaned = stripped.replace(/^\.+$/, "").trim();
+  return cleaned.length > 0 ? cleaned : "Untitled Document (Imported)";
 }
 
 /**

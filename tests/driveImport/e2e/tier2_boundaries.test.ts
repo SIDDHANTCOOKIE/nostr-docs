@@ -71,10 +71,10 @@ describe("Tier 2: Boundary Value Analysis & Adversarial Limits (55 Tests)", () =
     });
 
     it("1.4 handles hash base64 containing padding equals signs correctly", () => {
-      const b64 = btoa(JSON.stringify({ server: TEST_SERVER, hash: TEST_HASH, key: TEST_KEY, name: "p" }));
+      const b64 = btoa(JSON.stringify({ server: TEST_SERVER, hash: TEST_HASH, key: TEST_KEY, name: "pa" }));
       expect(b64.endsWith("=")).toBe(true);
       const result = parseDrivePayload(`https://pages.formstr.app/#payload=${b64}`);
-      expect(result.name).toBe("p");
+      expect(result.name).toBe("pa");
     });
 
     it("1.5 handles duplicate leading hash marks (##payload=)", () => {

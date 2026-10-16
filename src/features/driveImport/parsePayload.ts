@@ -485,7 +485,7 @@ export function normalizeDrivePayload(raw: DriveImportPayload): NormalizedDriveP
   const explicitMime = raw.mimeType ?? raw.type;
   let mimeType = "application/octet-stream";
   if (explicitMime && typeof explicitMime === "string" && explicitMime.trim()) {
-    mimeType = explicitMime.trim().toLowerCase();
+    mimeType = explicitMime.trim().split(";")[0].trim().toLowerCase();
   } else if (name && name !== "Untitled") {
     mimeType = getMimeTypeFromFilename(name);
   }
@@ -493,7 +493,16 @@ export function normalizeDrivePayload(raw: DriveImportPayload): NormalizedDriveP
   let size = 0;
   if (typeof raw.size === "number" || typeof raw.size === "string") {
     const parsedSize = typeof raw.size === "string" ? Number(raw.size.trim()) : raw.size;
-    if (Number.isFinite(parsedSize) && parsedSize >= 0) {
+    if (Number.isFinite(parsedSize)) {
+      if (parsedSize < 0) {
+        throw new DriveImportError(
+          "INVALID_NUMERIC_FIELD",
+          "File size cannot be negative",
+          "File size cannot be negative.",
+          undefined,
+          "size"
+        );
+      }
       size = Math.floor(parsedSize);
     }
   }
@@ -501,7 +510,16 @@ export function normalizeDrivePayload(raw: DriveImportPayload): NormalizedDriveP
   let chunkSize = DEFAULT_CHUNK_SIZE;
   if (typeof raw.chunkSize === "number" || typeof raw.chunkSize === "string") {
     const parsedChunkSize = typeof raw.chunkSize === "string" ? Number(raw.chunkSize.trim()) : raw.chunkSize;
-    if (Number.isFinite(parsedChunkSize) && parsedChunkSize > 0) {
+    if (Number.isFinite(parsedChunkSize)) {
+      if (parsedChunkSize <= 0) {
+        throw new DriveImportError(
+          "INVALID_NUMERIC_FIELD",
+          "Chunk size must be greater than zero",
+          "Chunk size must be greater than zero.",
+          undefined,
+          "chunkSize"
+        );
+      }
       chunkSize = Math.floor(parsedChunkSize);
     }
   }
@@ -553,9 +571,9 @@ export function normalizeDrivePayload(raw: DriveImportPayload): NormalizedDriveP
  */
 function extractFromHash(hashString: string): string | null {
   if (!hashString || typeof hashString !== "string") return null;
-  const trimmed = hashString.replace(/^#/, "");
+  const trimmed = hashString.replace(/^#+/, "");
 
-  if (trimmed.startsWith("payload=")) {
+  if (trimmed.toLowerCase().startsWith("payload=")) {
     const ampIndex = trimmed.indexOf("&");
     return ampIndex === -1 ? trimmed.slice(8) : trimmed.slice(8, ampIndex);
   }
@@ -563,7 +581,9 @@ function extractFromHash(hashString: string): string | null {
   const queryIndex = trimmed.indexOf("?");
   if (queryIndex !== -1) {
     const hashParams = new URLSearchParams(trimmed.slice(queryIndex + 1));
-    return hashParams.get("payload");
+    for (const [key, value] of hashParams.entries()) {
+      if (key.toLowerCase() === "payload") return value;
+    }
   }
 
   return null;
@@ -601,7 +621,13 @@ export function parseDrivePayload(urlOrString: string): NormalizedDrivePayload {
   }
 
   // 2. Channel 2: Single Query Parameter (?payload=<b64>)
-  const queryPayload = parsedUrl.searchParams.get("payload");
+  let queryPayload: string | null = null;
+  for (const [key, val] of parsedUrl.searchParams.entries()) {
+    if (key.toLowerCase() === "payload") {
+      queryPayload = val;
+      break;
+    }
+  }
   if (queryPayload !== null) {
     if (!queryPayload.trim()) {
       throw new DriveImportError("MISSING_PAYLOAD", "Empty payload parameter in query string");
@@ -611,14 +637,22 @@ export function parseDrivePayload(urlOrString: string): NormalizedDrivePayload {
   }
 
   // 3. Channel 3: Exploded Query Parameters (?server=...&hash=...&key=...)
-  const server = parsedUrl.searchParams.get("server");
+  const getParam = (name: string): string | null => {
+    const lower = name.toLowerCase();
+    for (const [key, val] of parsedUrl.searchParams.entries()) {
+      if (key.toLowerCase() === lower) return val;
+    }
+    return null;
+  };
+
+  const server = getParam("server");
   const key =
-    parsedUrl.searchParams.get("key") ??
-    parsedUrl.searchParams.get("encryptionKey") ??
-    parsedUrl.searchParams.get("k");
+    getParam("key") ??
+    getParam("encryptionKey") ??
+    getParam("k");
   const hashParam =
-    parsedUrl.searchParams.get("hash") ?? parsedUrl.searchParams.get("blobHash");
-  const chunksParam = parsedUrl.searchParams.get("chunks");
+    getParam("hash") ?? getParam("blobHash");
+  const chunksParam = getParam("chunks");
 
   if (server || key || hashParam || chunksParam) {
     let chunks: Array<string | ChunkRef> | undefined = undefined;
@@ -640,14 +674,14 @@ export function parseDrivePayload(urlOrString: string): NormalizedDrivePayload {
       key: key ?? undefined,
       hash: hashParam ?? undefined,
       chunks,
-      cipher: (parsedUrl.searchParams.get("cipher") as CipherType) ?? undefined,
-      encryptionAlgorithm: parsedUrl.searchParams.get("encryptionAlgorithm") ?? undefined,
-      name: parsedUrl.searchParams.get("name") ?? undefined,
-      mimeType: parsedUrl.searchParams.get("mimeType") ?? undefined,
-      type: parsedUrl.searchParams.get("type") ?? undefined,
-      size: parsedUrl.searchParams.has("size") ? parsedUrl.searchParams.get("size")! : undefined,
-      chunkSize: parsedUrl.searchParams.has("chunkSize") ? parsedUrl.searchParams.get("chunkSize")! : undefined,
-      unencryptedFileHash: parsedUrl.searchParams.get("unencryptedFileHash") ?? undefined,
+      cipher: (getParam("cipher") as CipherType) ?? undefined,
+      encryptionAlgorithm: getParam("encryptionAlgorithm") ?? undefined,
+      name: getParam("name") ?? undefined,
+      mimeType: getParam("mimeType") ?? undefined,
+      type: getParam("type") ?? undefined,
+      size: getParam("size") ?? undefined,
+      chunkSize: getParam("chunkSize") ?? undefined,
+      unencryptedFileHash: getParam("unencryptedFileHash") ?? undefined,
     };
 
     return normalizeDrivePayload(explodedPayload);
