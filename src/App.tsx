@@ -16,11 +16,12 @@ import {
 } from "react-router-dom";
 
 import DocumentList from "./components/DocumentList";
-import { DocumentProvider } from "./contexts/DocumentContext";
+import { DocumentProvider, useDocumentContext } from "./contexts/DocumentContext";
 import { UserProvider, useUser } from "./contexts/UserContext";
 import { ThemeModeProvider } from "./contexts/ThemeModeContext";
 import DocPage from "./components/DocPage";
 import ArticleView from "./components/ArticleView";
+import { DriveImportPage } from "./features/driveImport/components/DriveImportPage";
 import { SharedPagesProvider } from "./contexts/SharedDocsContext";
 import { RelayProvider } from "./contexts/RelayContext";
 import { DocMetadataProvider } from "./contexts/DocMetadataContext";
@@ -51,7 +52,45 @@ function ArticleViewWrapper() {
   return <ArticleView key={location.pathname} />;
 }
 
+function DriveImportPageWrapper() {
+  const navigate = useNavigate();
+  const { addImportedDocument } = useDocumentContext();
+
+  const handleOpenInEditor = async (
+    _docId: string,
+    _title: string,
+    content: string | Record<string, unknown>,
+  ) => {
+    try {
+      const textContent =
+        typeof content === "string" ? content : JSON.stringify(content);
+      const address = await addImportedDocument(textContent, { publish: true });
+      navigate(`/doc/${address}`);
+    } catch (e) {
+      console.error("Failed to import doc into editor", e);
+      navigate("/doc/new");
+    }
+  };
+
+  return (
+    <DriveImportPage
+      onBackToDocs={() => navigate("/")}
+      onOpenInEditor={handleOpenInEditor}
+    />
+  );
+}
+
 export function HomePage() {
+  const location = useLocation();
+  const hasPayload =
+    location.hash.startsWith("#payload=") ||
+    location.search.includes("payload=") ||
+    (location.search.includes("server=") && location.search.includes("hash="));
+
+  if (hasPayload) {
+    return <DriveImportPageWrapper />;
+  }
+
   return <AllPagesView />;
 }
 
@@ -76,6 +115,7 @@ const router = createRouter([
     element: <AppLayout />,
     children: [
       { index: true, element: <HomePage /> },
+      { path: "drive-import", element: <DriveImportPageWrapper /> },
       { path: "new", element: <DocPageWrapper /> },
       { path: "doc/new", element: <DocPageWrapper /> },
       { path: "doc/:naddr", element: <DocPageWrapper /> },
@@ -166,7 +206,7 @@ function AppLayout() {
           } else {
             App.exitApp();
           }
-        }).then((handle) => {
+        }).then((handle: { remove: () => void }) => {
           remove = () => handle.remove();
         });
       })
