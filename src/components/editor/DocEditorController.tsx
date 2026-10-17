@@ -85,6 +85,7 @@ import {
   setLocalOnlyFlag,
   clearVisitedFlag,
 } from "../../lib/localStore";
+import { clearDraft, loadDraft, saveDraft } from "../../lib/draftStore";
 import { cacheLocalEvents } from "../../dataLayer";
 
 import { EditorToolbar } from "./EditorToolbar";
@@ -121,6 +122,12 @@ const AUTO_SAVE_DELAY_MS = 30_000;
 // How long a collab session's last sync-step round-trip is trusted as "still
 // connected" for the autosave gate below.
 const RESYNC_FRESHNESS_MS = 2 * 60_000;
+
+// Session flag set when the user hits Share on an unsaved draft. Saving the
+// draft navigates to the document's own URL, which remounts this controller —
+// so the intent to open the Share dialog once that lands has to outlive the
+// instance. Session storage carries it across the remount.
+const REOPEN_SHARE_KEY = "formstr:reopenShareAfterSave";
 
 /** Wall-clock seconds. Extracted to module scope so the React Compiler does not
  *  treat a raw `Date.now()` inside component-scope helpers as a render-time
@@ -349,7 +356,17 @@ export function DocumentEditorController({
 
   const initialContent = activeVersion?.decryptedContent ?? "";
 
-  const [md, setMd] = useState(initialContent);
+  // A draft typed before login (or before a reload) is restored from the session
+  // draft store. Logging in remounts the account subtree, which would otherwise
+  // discard an unsaved draft entirely.
+  const restoredDraft = useMemo(
+    () => (isDraft ? loadDraft() : null),
+    // Re-read only when entering or leaving the draft state.
+    [isDraft],
+  );
+  const draftSeed = restoredDraft?.markdown ?? "";
+
+  const [md, setMd] = useState(draftSeed || initialContent);
   const [mode, setMode] = useState<EditorMode>(
     isViewOnly || !isDraft ? "preview" : "edit",
   );
@@ -472,6 +489,35 @@ export function DocumentEditorController({
     };
   }, [shareOpen, isOwner, viewKey, selectedDocumentId, relays]);
 
+  // Reopen the Share dialog after a draft was saved from the Share button.
+  useEffect(() => {
+    if (sessionStorage.getItem(REOPEN_SHARE_KEY) === "1") {
+      sessionStorage.removeItem(REOPEN_SHARE_KEY);
+      setShareOpen(true);
+    }
+  }, []);
+
+  /** Share button: on a draft, save it first (which navigates and remounts),
+   *  then the effect above reopens this dialog on the saved document. */
+  const handleShareClick = async () => {
+    if (!isDraft) {
+      setShareOpen(true);
+      return;
+    }
+    const content = mode === "edit" && editor ? getEditorMarkdown(editor) : mdRef.current;
+    if (!content.trim()) {
+      setToast({
+        open: true,
+        message: "Write something before sharing your page.",
+        severity: "error",
+      });
+      return;
+    }
+    sessionStorage.setItem(REOPEN_SHARE_KEY, "1");
+    const ok = await handleSave(false);
+    if (!ok) sessionStorage.removeItem(REOPEN_SHARE_KEY);
+  };
+
   const parseShareTarget = () => {
     if (!selectedDocumentId) return null;
     const [kindStr, owner, ...rest] = selectedDocumentId.split(":");
@@ -513,7 +559,9 @@ export function DocumentEditorController({
   const [publishTarget, setPublishTarget] = useState<"longform" | "communityNip" | null>(null);
   const [savingToShared, setSavingToShared] = useState(false);
   // Device-only state: for drafts tracked locally; for saved docs derived from context
-  const [draftLocalOnly, setDraftLocalOnly] = useState(false);
+  const [draftLocalOnly, setDraftLocalOnly] = useState(
+    restoredDraft?.localOnly ?? false,
+  );
   const isLocalOnly = isDraft
     ? draftLocalOnly
     : (selectedDocumentId ? localOnlyAddresses.has(selectedDocumentId) : false);
@@ -568,9 +616,9 @@ export function DocumentEditorController({
   const [uploadQueue, setUploadQueue] = useState<{ id: string; filename: string }[]>([]);
   const uploading = uploadQueue.length > 0;
 
-  const lastSavedMdRef = useRef<string>(initialContent);
+  const lastSavedMdRef = useRef<string>(activeVersion?.decryptedContent ?? "");
   // Always-current markdown — avoids stale closures in effects/save
-  const mdRef = useRef<string>(initialContent);
+  const mdRef = useRef<string>(draftSeed || initialContent);
   // Always-current mode — used in onUpdate to guard against split-mode clobber
   const modeRef = useRef<EditorMode>(mode);
   // Accepting a review from split mode already replaces TipTap with the final
@@ -592,6 +640,22 @@ export function DocumentEditorController({
   selectedDocIdRef.current = selectedDocumentId;
   isCollabDocRef.current = isCollabDoc;
   collabRef.current = collab;
+
+  /* ── Persist the in-progress draft ───────────────────────── */
+  // A draft has no address until it is saved, so it lives only in component
+  // state. Stash it (debounced) so the account-subtree remount on login/logout
+  // doesn't discard it. Cleared as soon as the page is saved or emptied.
+  useEffect(() => {
+    if (!isDraft || !md.trim()) {
+      clearDraft();
+      return;
+    }
+    const timer = setTimeout(
+      () => saveDraft({ markdown: md, localOnly: draftLocalOnly }),
+      300,
+    );
+    return () => clearTimeout(timer);
+  }, [isDraft, md, draftLocalOnly]);
 
   // Always-current upload function — avoids stale closures in editorProps handlers
   const uploadFileRef = useRef<(file: File) => Promise<void>>(async () => { });
@@ -834,7 +898,7 @@ export function DocumentEditorController({
     },
     // Collab docs get their content from the Yjs doc (via Collaboration), not
     // from the markdown snapshot.
-    content: isCollabReady ? undefined : initialContent,
+    content: isCollabReady ? undefined : draftSeed || initialContent,
     // Editing is never blocked. While a collab session is still connecting the
     // user edits the plain-markdown editor; those keystrokes live in mdRef and
     // are carried into the shared doc by the seed effect when it becomes ready.
@@ -1174,8 +1238,8 @@ export function DocumentEditorController({
   /* ── Keyboard shortcuts ─────────────────────────────────── */
   // Use a ref so the keydown listener always calls the latest handleSave
   // without needing to re-register on every render.
-  const handleSaveRef = useRef<(silent?: boolean) => Promise<void>>(
-    async () => { },
+  const handleSaveRef = useRef<(silent?: boolean) => Promise<boolean>>(
+    async () => true,
   );
 
   useEffect(() => {
@@ -1510,8 +1574,8 @@ export function DocumentEditorController({
     }
   };
 
-  const handleSave = async (silent = false) => {
-    if (saving) return;
+  const handleSave = async (silent = false): Promise<boolean> => {
+    if (saving) return false;
 
     // In WYSIWYG mode, read from editor (avoids stale React state).
     // In split/preview mode, mdRef is updated by the textarea onChange.
@@ -1520,7 +1584,7 @@ export function DocumentEditorController({
         ? getEditorMarkdown(editor)
         : mdRef.current;
 
-    if (mdToSave === lastSavedMdRef.current) return;
+    if (mdToSave === lastSavedMdRef.current) return true;
 
     setSaving(true);
     const prevSavedMd = lastSavedMdRef.current;
@@ -1550,6 +1614,7 @@ export function DocumentEditorController({
           }
         }
       }
+      return true;
     } catch (err) {
       lastSavedMdRef.current = prevSavedMd; // restore so unsaved indicator reappears
       console.error("Save failed:", err);
@@ -1558,6 +1623,7 @@ export function DocumentEditorController({
         message: "Failed to save!",
         severity: "error",
       });
+      return false;
     } finally {
       setSaving(false);
     }
@@ -1806,7 +1872,7 @@ export function DocumentEditorController({
             }}
             onSave={() => handleSave(false)}
             handleDelete={handleDelete}
-            onShare={() => setShareOpen(true)}
+            onShare={handleShareClick}
             versions={versions}
             onSelectVersion={handleSelectVersion}
             editor={editor}
@@ -2169,6 +2235,7 @@ export function DocumentEditorController({
       <ShareModal
         open={shareOpen}
         onClose={() => setShareOpen(false)}
+        docTitle={getDocTitle()}
         onPublicPost={() => handleSharePublic()}
         onPublish={(target) => {
           setShareOpen(false);
@@ -2252,9 +2319,13 @@ export function DocumentEditorController({
             selectedDocumentId,
             md,
             relays,
-            viewKey,
+            // Rotating a view link must mint a fresh viewKey — reusing the one
+            // this session already adopted would leave every link handed out
+            // earlier still working.
+            !canEdit && rotate ? undefined : viewKey,
             editKey,
             blossomServers,
+            history?.versions.at(-1)?.event.created_at ?? 0,
           );
 
           const sharedDocTag = [
@@ -2308,14 +2379,21 @@ export function DocumentEditorController({
     </Box>
   );
 
-  if (commentsEnabled) {
-    return (
-      <CommentProvider viewKey={viewKey!} docAddress={selectedDocumentId!} currentDocText={docPlainText} editKey={editKey} myPubkey={user?.pubkey}>
-        <CommentHighlightEffect editor={editor} mode={mode} />
-        {editorJsx}
-      </CommentProvider>
-    );
-  }
-
-  return editorJsx;
+  // Always wrap in CommentProvider so the root element type is stable. Swapping
+  // it in/out when the owner adopts a share viewKey used to remount the whole
+  // editor subtree (closing the open Share dialog, restarting the collab
+  // session). `enabled` toggles the comment subscriptions instead.
+  return (
+    <CommentProvider
+      enabled={commentsEnabled}
+      viewKey={viewKey ?? ""}
+      docAddress={selectedDocumentId ?? ""}
+      currentDocText={docPlainText}
+      editKey={editKey}
+      myPubkey={user?.pubkey}
+    >
+      {commentsEnabled && <CommentHighlightEffect editor={editor} mode={mode} />}
+      {editorJsx}
+    </CommentProvider>
+  );
 }

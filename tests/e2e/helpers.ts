@@ -112,6 +112,15 @@ export const TEST_PASSPHRASE = "e2e-test-passphrase";
 export async function loginAsGuest(page: Page) {
   await page.goto("/new");
   await page.getByRole("button", { name: "Login", exact: true }).click();
+  await createAccountFromOpenModal(page);
+}
+
+/**
+ * Complete account creation from an already-open login modal (the caller opens
+ * it). Split out so a test can log in without navigating away first — e.g. to
+ * check that a draft typed while logged out survives the login.
+ */
+export async function createAccountFromOpenModal(page: Page) {
   // The login modal and the recovery-key dialog can overlap in the DOM while
   // the former is fading out, so scope each by its own text.
   const loginDialog = page
@@ -151,6 +160,19 @@ export async function unlockAfterReload(page: Page) {
   await dialog.getByLabel("Passphrase").fill(TEST_PASSPHRASE);
   await dialog.getByRole("button", { name: "Unlock" }).click();
   await expect(dialog).toBeHidden({ timeout: 15_000 });
+}
+
+/**
+ * Dismiss the Share dialog if it is open. The dialog stays open (by design)
+ * after a link is generated, so tests that continue to drive the editor must
+ * close it — while a modal is open the rest of the app is out of the
+ * accessibility tree, so role-based queries for the toolbar/sidebar would miss.
+ */
+export async function closeShareDialog(page: Page) {
+  const dialog = page.getByRole("dialog").filter({ hasText: "Share Page" });
+  if ((await dialog.count()) === 0) return;
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(dialog).toBeHidden({ timeout: 10_000 });
 }
 
 /** The WYSIWYG editor surface (TipTap renders a contenteditable with class "tiptap"). */
