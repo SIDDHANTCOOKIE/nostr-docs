@@ -10,8 +10,6 @@
  * Encodes as: Authorization: Nostr <base64-json-event>
  */
 
-import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
-import { bytesToHex, hexToBytes } from "nostr-tools/utils";
 import { DriveImportError, type NostrSignerLike } from "../types";
 
 /**
@@ -76,91 +74,3 @@ export async function createKind24242AuthHeader(
   }
 }
 
-/**
- * Parses and validates a Kind 24242 Nostr authorization header.
- * Utility for verification, debugging, and mock server testing.
- */
-export function parseKind24242AuthHeader(authHeader: string): {
-  kind: number;
-  pubkey: string;
-  created_at: number;
-  tags: string[][];
-  content: string;
-  sig?: string;
-  id?: string;
-} {
-  const trimmed = authHeader.trim();
-  if (!trimmed.startsWith("Nostr ")) {
-    throw new DriveImportError(
-      "BLOSSOM_AUTH_FAILED",
-      `Invalid Authorization header scheme: must start with "Nostr ", got "${trimmed.substring(0, 10)}"`,
-      "Malformed authorization header",
-      "Authorization Failed",
-      "header",
-    );
-  }
-
-  const b64 = trimmed.substring(6).trim();
-  try {
-    const json = decodeURIComponent(escape(atob(b64)));
-    const event = JSON.parse(json);
-
-    if (event.kind !== 24242) {
-      throw new DriveImportError(
-        "BLOSSOM_AUTH_FAILED",
-        `Expected kind 24242 auth event, got kind ${event.kind}`,
-        "Incorrect event kind",
-        "Authorization Failed",
-        "kind",
-      );
-    }
-
-    return event;
-  } catch (error) {
-    if (error instanceof DriveImportError) throw error;
-    throw new DriveImportError(
-      "BLOSSOM_AUTH_FAILED",
-      `Failed to decode Nostr auth header: ${error instanceof Error ? error.message : String(error)}`,
-      "Corrupted authorization header",
-      "Authorization Failed",
-      "header",
-    );
-  }
-}
-
-/**
- * Creates an in-memory ephemeral Nostr signer.
- * Convenient for testing or signing without a browser extension.
- */
-export function createEphemeralSigner(
-  secretKeyHex?: string,
-): NostrSignerLike & { secretKeyHex: string } {
-  const secretKey = secretKeyHex
-    ? hexToBytes(secretKeyHex.trim())
-    : generateSecretKey();
-  const hex = bytesToHex(secretKey);
-  const pubkey = getPublicKey(secretKey);
-
-  return {
-    secretKeyHex: hex,
-    async getPublicKey(): Promise<string> {
-      return pubkey;
-    },
-    async signEvent(event: {
-      kind: number;
-      tags: string[][];
-      content: string;
-      created_at: number;
-      pubkey?: string;
-    }) {
-      const template = {
-        kind: event.kind,
-        tags: event.tags,
-        content: event.content,
-        created_at: event.created_at,
-      };
-      const signed = finalizeEvent(template, secretKey);
-      return signed;
-    },
-  };
-}

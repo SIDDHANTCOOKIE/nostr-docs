@@ -8,7 +8,6 @@ import type {
   CipherType,
   DriveImportPayload,
   NormalizedDrivePayload,
-  ParseResult,
 } from "./types";
 import { DriveImportError } from "./types";
 
@@ -692,45 +691,6 @@ export function parseDrivePayload(urlOrString: string): NormalizedDrivePayload {
 }
 
 /**
- * URL parser returning a structured ParseResult without throwing exceptions.
- */
-export function parseDriveImportUrl(rawUrl?: string): ParseResult {
-  try {
-    let input: string;
-    if (typeof rawUrl === "string") {
-      input = rawUrl;
-    } else if (rawUrl === undefined || rawUrl === null) {
-      input = typeof window !== "undefined" && window.location ? window.location.href : "";
-    } else {
-      throw new DriveImportError("MISSING_PAYLOAD", "No URL or payload string provided");
-    }
-    const payload = parseDrivePayload(input);
-    return {
-      ok: true,
-      success: true,
-      payload,
-    };
-  } catch (err) {
-    if (err instanceof DriveImportError) {
-      return {
-        ok: false,
-        success: false,
-        error: err,
-      };
-    }
-    const fallbackError = new DriveImportError(
-      "INVALID_URL",
-      err instanceof Error ? err.message : String(err)
-    );
-    return {
-      ok: false,
-      success: false,
-      error: fallbackError,
-    };
-  }
-}
-
-/**
  * Sanitizes URL in window.history immediately after parsing to prevent private key leakage.
  * Replaces browser history state cleanly without triggering reloads.
  */
@@ -767,21 +727,4 @@ export function sanitizeImportUrl(currentUrl?: string): void {
  * Canonical and alias exports for URL sanitization.
  */
 export const sanitizeDriveImportUrl = sanitizeImportUrl;
-export const sanitizeBrowserUrl = sanitizeImportUrl;
 
-/**
- * Utility to redact sensitive keys before logging or reporting.
- */
-export function redactPayload<T extends Record<string, unknown>>(payload: T): T {
-  if (!payload || typeof payload !== "object") {
-    return payload;
-  }
-  const redacted = { ...payload };
-  const sensitiveFields = ["key", "encryptionKey", "privateKeyHex", "secretKey", "k"];
-  for (const field of sensitiveFields) {
-    if (field in redacted && typeof (redacted as Record<string, unknown>)[field] === "string") {
-      (redacted as Record<string, unknown>)[field] = "[REDACTED]";
-    }
-  }
-  return redacted;
-}

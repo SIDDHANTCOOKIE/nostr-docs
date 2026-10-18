@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
-  parseDrivePayload,
   parseDriveImportUrl,
+} from "./helpers/driveFixtures";
+import {
+  parseDrivePayload,
   decodeBase64Json,
   normalizeDrivePayload,
-  redactPayload,
 } from "../../src/features/driveImport/parsePayload";
 import {
   DriveImportError,

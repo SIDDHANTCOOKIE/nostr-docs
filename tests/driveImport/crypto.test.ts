@@ -10,6 +10,11 @@
  * 5. Authoritative cryptographic test vectors from Section 6 of spec miner analysis.
  */
 
+import {
+  encryptNip44LegacyBytes,
+  encryptNipFsSegmentBlob,
+  encryptSegment,
+} from "./helpers/driveFixtures";
 import { describe, it, expect } from "vitest";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, hexToBytes } from "nostr-tools/utils";
@@ -18,15 +23,12 @@ import {
   decryptNipFsSegmentBlob,
   decryptSegment,
   deriveConversationKey,
-  encryptNipFsSegmentBlob,
-  encryptSegment,
   importSegmentKey,
   segmentCount,
 } from "../../src/features/driveImport/crypto/nipFsSegment";
 import {
   decryptNip44LegacyBytes,
   deriveGcmKeyAndIv,
-  encryptNip44LegacyBytes,
   tryUnwrapLegacyBase64,
 } from "../../src/features/driveImport/crypto/nip44Legacy";
 import {

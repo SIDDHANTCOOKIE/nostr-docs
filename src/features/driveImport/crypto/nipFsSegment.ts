@@ -165,26 +165,6 @@ export async function decryptSegment(
 }
 
 /**
- * Encrypts a single plaintext segment using AES-256-GCM.
- * Produces ciphertext concatenated with 16-byte authentication tag.
- */
-export async function encryptSegment(
-  plaintext: Uint8Array,
-  blobKey: Uint8Array,
-  index: number,
-  isLast: boolean,
-): Promise<Uint8Array> {
-  const aesKey = await importSegmentKey(blobKey);
-  const nonce = buildSegmentNonce(index, isLast);
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: nonce as BufferSource },
-    aesKey,
-    plaintext as BufferSource,
-  );
-  return new Uint8Array(ciphertext);
-}
-
-/**
  * Decrypts a contiguous single-blob encrypted under nip-fs-segment-v1.
  * Slices the blob into segment frames, verifies nonces, decrypts each frame sequentially,
  * and concatenates into the recovered plaintext.
@@ -257,36 +237,3 @@ export async function decryptNipFsSegmentBlob(
   return result;
 }
 
-/**
- * Encrypts an entire plaintext byte array into a contiguous nip-fs-segment-v1 blob.
- * Utility for vector generation and symmetric round-trip testing.
- */
-export async function encryptNipFsSegmentBlob(
-  plaintext: Uint8Array,
-  privateKeyHex: string,
-  chunkSize = 65536,
-): Promise<Uint8Array> {
-  const blobKey = deriveConversationKey(privateKeyHex);
-  const total = segmentCount(plaintext.length, chunkSize);
-  const frames: Uint8Array[] = [];
-  let totalEncLen = 0;
-
-  for (let i = 0; i < total; i++) {
-    const isLast = i === total - 1;
-    const offset = i * chunkSize;
-    const plainLen = isLast ? plaintext.length - offset : chunkSize;
-    const segPlain = plaintext.subarray(offset, offset + plainLen);
-    const encFrame = await encryptSegment(segPlain, blobKey, i, isLast);
-    frames.push(encFrame);
-    totalEncLen += encFrame.length;
-  }
-
-  const out = new Uint8Array(totalEncLen);
-  let writeOffset = 0;
-  for (const frame of frames) {
-    out.set(frame, writeOffset);
-    writeOffset += frame.length;
-  }
-
-  return out;
-}

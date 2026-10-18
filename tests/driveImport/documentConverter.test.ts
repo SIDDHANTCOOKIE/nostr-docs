@@ -18,8 +18,6 @@ import { makeDocx, paragraph } from "./helpers/makeDocx";
 import {
   classifyDriveFile,
   getDocumentSubtype,
-  isDocumentFile,
-  isMediaFile,
   normalizeMimeType,
   resolveFileExtension,
 } from "../../src/features/driveImport/converters/mimeClassifier";
@@ -126,12 +124,6 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
       expect(zip.actionLabel).toBe("Download File");
     });
 
-    it("1.9 helper predicates isDocumentFile and isMediaFile return correct booleans", () => {
-      expect(isDocumentFile("text/markdown", "notes.md")).toBe(true);
-      expect(isDocumentFile("image/png", "pic.png")).toBe(false);
-      expect(isMediaFile("image/png", "pic.png")).toBe(true);
-      expect(isMediaFile("application/zip", "file.zip")).toBe(false);
-    });
   });
 
   // =========================================================================

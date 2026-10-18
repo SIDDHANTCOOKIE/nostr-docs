@@ -232,16 +232,3 @@ export function classifyDriveFile(mimeType?: string, fileName?: string): FileCla
   };
 }
 
-/**
- * Checks if the given file type or name qualifies for document import into TipTap.
- */
-export function isDocumentFile(mimeType?: string, fileName?: string): boolean {
-  return classifyDriveFile(mimeType, fileName).isDocument;
-}
-
-/**
- * Checks if the given file type or name qualifies for in-app media preview.
- */
-export function isMediaFile(mimeType?: string, fileName?: string): boolean {
-  return classifyDriveFile(mimeType, fileName).isMedia;
-}

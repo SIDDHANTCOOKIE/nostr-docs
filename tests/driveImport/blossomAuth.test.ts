@@ -10,13 +10,17 @@
  * 5. Full fetchAndDecryptDriveFile integration workflow.
  */
 
+import {
+  createEphemeralSigner,
+  encryptNip44LegacyBytes,
+  encryptNipFsSegmentBlob,
+  parseKind24242AuthHeader,
+} from "./helpers/driveFixtures";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { bytesToHex } from "nostr-tools/utils";
 import { sha256 } from "@noble/hashes/sha256";
 import {
-  createEphemeralSigner,
   createKind24242AuthHeader,
-  parseKind24242AuthHeader,
 } from "../../src/features/driveImport/blossom/auth";
 import {
   fetchAndDecryptDriveFile,
@@ -26,8 +30,6 @@ import {
   DriveImportError,
   type NormalizedDrivePayload,
 } from "../../src/features/driveImport/types";
-import { encryptNipFsSegmentBlob } from "../../src/features/driveImport/crypto/nipFsSegment";
-import { encryptNip44LegacyBytes } from "../../src/features/driveImport/crypto/nip44Legacy";
 
 describe("Milestone 2: Blossom Client & Kind 24242 Auth Engine", () => {
   const TEST_KEY_HEX = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";

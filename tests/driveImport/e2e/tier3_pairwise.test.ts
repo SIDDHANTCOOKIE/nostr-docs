@@ -9,13 +9,18 @@
  * - Blossom Auth: Unprotected vs Protected (Kind 24242 auto-retry)
  */
 
+import {
+  createEphemeralSigner,
+  encryptNip44LegacyBytes,
+  encryptNipFsSegmentBlob,
+} from "../helpers/driveFixtures";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex } from "nostr-tools/utils";
 import { parseDrivePayload } from "../../../src/features/driveImport/parsePayload";
-import { encryptNipFsSegmentBlob, deriveConversationKey } from "../../../src/features/driveImport/crypto/nipFsSegment";
-import { encryptNip44LegacyBytes } from "../../../src/features/driveImport/crypto/nip44Legacy";
-import { createEphemeralSigner } from "../../../src/features/driveImport/blossom/auth";
+import {
+  deriveConversationKey,
+} from "../../../src/features/driveImport/crypto/nipFsSegment";
 import { fetchAndDecryptDriveFile } from "../../../src/features/driveImport/blossom/fetchBlob";
 import { convertDriveFileToDocument } from "../../../src/features/driveImport/converters/documentConverter";
 import { classifyDriveFile } from "../../../src/features/driveImport/converters/mimeClassifier";

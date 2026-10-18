@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
-  parseDrivePayload,
   parseDriveImportUrl,
+} from "./helpers/driveFixtures";
+import {
+  parseDrivePayload,
   sanitizeImportUrl,
   sanitizeDriveImportUrl,
   decodeBase64Json,
   normalizeDrivePayload,
-  redactPayload,
 } from "../../src/features/driveImport/parsePayload";
 import {
   DriveImportError,
@@ -534,24 +535,6 @@ describe("Milestone 1: parseDrivePayload", () => {
   // GROUP 7: Security & Redaction
   // =========================================================================
   describe("Security & Redaction", () => {
-    it("7.1 redactPayload strips privateKey and key fields", () => {
-      const sensitive = {
-        server: SERVER,
-        hash: VALID_HASH,
-        key: VALID_KEY,
-        privateKeyHex: VALID_KEY,
-        encryptionKey: VALID_KEY,
-        name: "secret.docx",
-      };
-
-      const redacted = redactPayload(sensitive);
-      expect(redacted.key).toBe("[REDACTED]");
-      expect(redacted.privateKeyHex).toBe("[REDACTED]");
-      expect(redacted.encryptionKey).toBe("[REDACTED]");
-      expect(redacted.server).toBe(SERVER);
-      expect(redacted.name).toBe("secret.docx");
-    });
-
     it("7.2 sanitizeDriveImportUrl alias works identically to sanitizeImportUrl", () => {
       const replaceSpy = vi.spyOn(window.history, "replaceState");
       sanitizeDriveImportUrl("https://pages.formstr.app/drive-import?key=0123");

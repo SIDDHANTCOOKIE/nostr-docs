@@ -173,32 +173,3 @@ export async function decryptNip44LegacyBytes(
   }
 }
 
-/**
- * Encrypts raw plaintext into a legacy NIP-44 v2 payload (0x02 || nonce || ct).
- * Used for vector generation and round-trip verification.
- */
-export async function encryptNip44LegacyBytes(
-  plaintext: Uint8Array,
-  privateKeyHex: string,
-  nonce?: Uint8Array,
-): Promise<Uint8Array> {
-  const finalNonce = nonce ?? crypto.getRandomValues(new Uint8Array(32));
-  if (finalNonce.length !== 32) {
-    throw new Error(`Nonce must be 32 bytes, got ${finalNonce.length}`);
-  }
-
-  const conversationKey = deriveConversationKey(privateKeyHex);
-  const { aesKey, iv } = await deriveGcmKeyAndIv(conversationKey, finalNonce);
-
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: iv as BufferSource },
-    aesKey,
-    plaintext as BufferSource,
-  );
-
-  const payload = new Uint8Array(1 + 32 + ciphertext.byteLength);
-  payload[0] = 2; // Version 2
-  payload.set(finalNonce, 1);
-  payload.set(new Uint8Array(ciphertext), 33);
-  return payload;
-}
