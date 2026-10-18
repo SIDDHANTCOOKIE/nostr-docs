@@ -24,7 +24,7 @@ import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import CropFreeIcon from "@mui/icons-material/CropFree";
 import { useDocMetadata } from "../../contexts/DocMetadataContext";
 import { getDocumentTags } from "../AllPagesView";
-import { useNavigate, useBlocker } from "react-router-dom";
+import { useNavigate, useBlocker, useLocation } from "react-router-dom";
 import { finalizeEvent, generateSecretKey, getPublicKey, getEventHash, nip19, type Event } from "nostr-tools";
 import { bytesToHex, hexToBytes } from "nostr-tools/utils";
 import { useEditor, type Editor } from "@tiptap/react";
@@ -266,6 +266,8 @@ export function DocumentEditorController({
   const { setDocSharedAs, docSharedAs, docTags } = useDocMetadata();
 
   const navigate = useNavigate();
+  // Set by flows that create a page for the user to work on straight away (Drive import).
+  const opensInEditMode = (useLocation().state as { openInEditMode?: boolean } | null)?.openInEditMode === true;
   const { relays } = useRelays();
 
   const isDraft = selectedDocumentId === null;
@@ -368,7 +370,7 @@ export function DocumentEditorController({
 
   const [md, setMd] = useState(draftSeed || initialContent);
   const [mode, setMode] = useState<EditorMode>(
-    isViewOnly || !isDraft ? "preview" : "edit",
+    isViewOnly ? "preview" : isDraft || opensInEditMode ? "edit" : "preview",
   );
   const [saving, setSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(

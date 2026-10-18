@@ -81,6 +81,8 @@ function DriveImportPageWrapper() {
         return {};
       }
     };
+    // The user clicked Open in editor, so the page should open ready to type, not in read mode.
+    const openInEditor = { state: { openInEditMode: true } };
     const toPath = (address: string) => {
       const [kind, pubkey, identifier] = address.split(":");
       return `/doc/${nip19.naddrEncode({ kind: Number(kind), pubkey, identifier })}`;
@@ -90,7 +92,7 @@ function DriveImportPageWrapper() {
       const existing = sourceKey ? readMap()[sourceKey] : undefined;
       if (existing && visibleDocuments.has(existing)) {
         clearActiveImportPayload();
-        navigate(toPath(existing));
+        navigate(toPath(existing), openInEditor);
         return;
       }
 
@@ -108,7 +110,7 @@ function DriveImportPageWrapper() {
         }
       }
       clearActiveImportPayload();
-      navigate(toPath(address));
+      navigate(toPath(address), openInEditor);
     } catch (e) {
       console.error("Failed to import doc into editor", e);
       window.alert(
