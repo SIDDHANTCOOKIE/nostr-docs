@@ -38,7 +38,8 @@ function child(el: Element | null | undefined, name: string): Element | null {
 }
 
 function attr(el: Element | null, name: string): string | null {
-  return el ? el.getAttributeNS(W_NS, name) : null;
+  // Qualified-name fallback for DOM implementations without namespaced attribute lookup.
+  return el ? (el.getAttributeNS(W_NS, name) ?? el.getAttribute(`w:${name}`)) : null;
 }
 
 /** A toggle property like <w:b/> is on unless w:val is false/0/none. */
@@ -163,14 +164,14 @@ async function readNumberingFormats(zip: JSZip): Promise<Map<string, boolean>> {
 
   const doc = new DOMParser().parseFromString(await file.async("string"), "application/xml");
   const abstractOrdered = new Map<string, boolean>();
-  for (const abs of Array.from(doc.getElementsByTagNameNS(W_NS, "abstractNum"))) {
-    const id = abs.getAttributeNS(W_NS, "abstractNumId") ?? "";
+  for (const abs of children(doc.documentElement, "abstractNum")) {
+    const id = attr(abs, "abstractNumId") ?? "";
     const lvl0 = children(abs, "lvl")[0];
     const fmt = attr(child(lvl0, "numFmt"), "val");
     abstractOrdered.set(id, !!fmt && fmt !== "bullet");
   }
-  for (const num of Array.from(doc.getElementsByTagNameNS(W_NS, "num"))) {
-    const id = num.getAttributeNS(W_NS, "numId") ?? "";
+  for (const num of children(doc.documentElement, "num")) {
+    const id = attr(num, "numId") ?? "";
     const abstractId = attr(child(num, "abstractNumId"), "val") ?? "";
     formats.set(id, abstractOrdered.get(abstractId) ?? false);
   }
@@ -193,7 +194,7 @@ export async function convertDocxToDocument(
   if (!documentFile) throw corrupted("word/document.xml not found in DOCX archive");
 
   const xml = new DOMParser().parseFromString(await documentFile.async("string"), "application/xml");
-  const body = xml.getElementsByTagNameNS(W_NS, "body")[0];
+  const body = child(xml.documentElement, "body");
   if (!body) throw corrupted("DOCX document body is missing");
 
   const numFormats = await readNumberingFormats(zip);

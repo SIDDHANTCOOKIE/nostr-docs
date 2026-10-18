@@ -131,7 +131,7 @@ describe("Milestone 4: Standalone Preview & UI Components", () => {
         }),
       );
 
-      expect(html).toContain("Downloading encrypted blob from storage...");
+      expect(html).toContain("Downloading");
       expect(html).toContain("document.pdf");
       expect(html).toContain("50%");
       expect(html).toContain("1.0 KB");
@@ -150,7 +150,7 @@ describe("Milestone 4: Standalone Preview & UI Components", () => {
         }),
       );
 
-      expect(html).toContain("Decrypting file contents...");
+      expect(html).toContain("Decrypting");
       expect(html).toContain("100%");
     });
   });

@@ -17,6 +17,8 @@ import {
 } from "../types";
 import { classifyDriveFile } from "./mimeClassifier";
 import { convertDocxToDocument } from "./docxConverter";
+
+export { convertDocxToDocument };
 import { htmlToMarkdown } from "./htmlToMarkdown";
 
 /**
@@ -485,7 +487,7 @@ export async function convertDriveFileToDocument(
   const chars = converted.rawText.length;
 
   const bodyMarkdown =
-    subtype === "docx" || subtype === "html"
+    (subtype === "docx" || subtype === "html") && typeof DOMParser !== "undefined"
       ? htmlToMarkdown(converted.htmlContent)
       : converted.rawText;
   const markdown = /^#{1,6}\s/.test(bodyMarkdown)

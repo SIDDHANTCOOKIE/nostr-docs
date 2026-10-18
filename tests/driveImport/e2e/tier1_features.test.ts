@@ -5,6 +5,7 @@
  * Exactly 5 test cases per identified feature across features 1 to 11.
  */
 
+import { makeDocx, paragraph } from "../helpers/makeDocx";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex } from "nostr-tools/utils";
@@ -372,16 +373,7 @@ describe("Tier 1: Comprehensive Feature Requirements (55 Tests)", () => {
     });
 
     it("8.4 validates DOCX archive and extracts paragraphs", async () => {
-      const xml = "<w:p><w:r><w:t>DOCX Text</w:t></w:r></w:p>";
-      const encoded = new TextEncoder().encode(xml);
-      const zip = new Uint8Array(4 + encoded.length);
-      zip[0] = 0x50;
-      zip[1] = 0x4b;
-      zip[2] = 0x03;
-      zip[3] = 0x04;
-      zip.set(encoded, 4);
-
-      const doc = await convertDocxToDocument(zip);
+      const doc = await convertDocxToDocument(await makeDocx(paragraph("DOCX Text")));
       expect(doc.rawText).toContain("DOCX Text");
     });
 

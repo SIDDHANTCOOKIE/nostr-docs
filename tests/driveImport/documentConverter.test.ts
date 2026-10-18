@@ -12,7 +12,9 @@
  * 7. Universal convertDriveFileToDocument workflow.
  */
 
+// @vitest-environment happy-dom
 import { describe, it, expect } from "vitest";
+import { makeDocx, paragraph } from "./helpers/makeDocx";
 import {
   classifyDriveFile,
   getDocumentSubtype,
@@ -324,20 +326,20 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
       await expect(convertDocxToDocument(fakeDocx)).rejects.toThrow(DriveImportError);
     });
 
-    it("6.3 extracts text segments from DOCX payload containing raw XML tags", async () => {
-      // Create minimal fake ZIP container with raw XML text
-      const xml = '<w:p><w:r><w:t>Extracted from Word Doc</w:t></w:r></w:p>';
-      const encodedXml = new TextEncoder().encode(xml);
-      // Prepend PK\x03\x04
-      const container = new Uint8Array(4 + encodedXml.length);
-      container[0] = 0x50;
-      container[1] = 0x4b;
-      container[2] = 0x03;
-      container[3] = 0x04;
-      container.set(encodedXml, 4);
+    it("6.3 extracts text, headings, lists and tables from a real DOCX archive", async () => {
+      const docx = await makeDocx(
+        paragraph("Report title", '<w:pStyle w:val="Heading1"/>') +
+          paragraph("Extracted from Word Doc") +
+          paragraph("First point", '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>') +
+          "<w:tbl><w:tr><w:tc>" + paragraph("Cell A") + "</w:tc><w:tc>" + paragraph("Cell B") + "</w:tc></w:tr></w:tbl>",
+      );
 
-      const result = await convertDocxToDocument(container);
+      const result = await convertDocxToDocument(docx);
       expect(result.rawText).toContain("Extracted from Word Doc");
+      expect(result.htmlContent).toContain("<h1>Report title</h1>");
+      expect(result.htmlContent).toContain("<li>");
+      expect(result.htmlContent).toContain("<table>");
+      expect(result.htmlContent).toContain("Cell B");
       expect(result.tiptapJson.type).toBe("doc");
     });
   });
