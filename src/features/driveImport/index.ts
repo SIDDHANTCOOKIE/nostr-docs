@@ -28,3 +28,6 @@ export * from "./components/BinaryDownloadView";
 export * from "./components/MediaPreviewModal";
 export * from "./components/DriveImportPage";
 export * from "./hooks/useDriveImport";
+export * from "./hooks/useOpenImportedDocument";
+export * from "./importRegistry";
+export * from "./editModeRoute";

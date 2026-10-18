@@ -25,6 +25,7 @@ import CropFreeIcon from "@mui/icons-material/CropFree";
 import { useDocMetadata } from "../../contexts/DocMetadataContext";
 import { getDocumentTags } from "../AllPagesView";
 import { useNavigate, useBlocker, useLocation } from "react-router-dom";
+import { isEditModeRouteState } from "../../features/driveImport/editModeRoute";
 import { finalizeEvent, generateSecretKey, getPublicKey, getEventHash, nip19, type Event } from "nostr-tools";
 import { bytesToHex, hexToBytes } from "nostr-tools/utils";
 import { useEditor, type Editor } from "@tiptap/react";
@@ -86,6 +87,7 @@ import {
   clearVisitedFlag,
 } from "../../lib/localStore";
 import { clearDraft, loadDraft, saveDraft } from "../../lib/draftStore";
+import { heuristicTitle } from "../../lib/docSearch";
 import { cacheLocalEvents } from "../../dataLayer";
 
 import { EditorToolbar } from "./EditorToolbar";
@@ -267,7 +269,7 @@ export function DocumentEditorController({
 
   const navigate = useNavigate();
   // Set by flows that create a page for the user to work on straight away (Drive import).
-  const opensInEditMode = (useLocation().state as { openInEditMode?: boolean } | null)?.openInEditMode === true;
+  const startsInEditMode = isEditModeRouteState(useLocation().state);
   const { relays } = useRelays();
 
   const isDraft = selectedDocumentId === null;
@@ -370,7 +372,7 @@ export function DocumentEditorController({
 
   const [md, setMd] = useState(draftSeed || initialContent);
   const [mode, setMode] = useState<EditorMode>(
-    isViewOnly ? "preview" : isDraft || opensInEditMode ? "edit" : "preview",
+    isViewOnly ? "preview" : isDraft || startsInEditMode ? "edit" : "preview",
   );
   const [saving, setSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(
@@ -1662,12 +1664,7 @@ export function DocumentEditorController({
 
   /* ── Export helpers ──────────────────────────────────────── */
 
-  const getDocTitle = () => {
-    const firstLine = mdRef.current.split("\n").find((l) => l.trim());
-    return firstLine
-      ? firstLine.replace(/^#+\s*/, "").trim().slice(0, 60) || "Untitled"
-      : "Untitled";
-  };
+  const getDocTitle = () => heuristicTitle(mdRef.current, 60) || "Untitled";
 
   const handleExportMarkdown = () => {
     exportAsMarkdown(mdRef.current);

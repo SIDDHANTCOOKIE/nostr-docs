@@ -20,7 +20,8 @@ import { classifyDriveFile } from "../converters/mimeClassifier";
 
 export interface DriveImportPageProps {
   onBackToDocs?: () => void;
-  onOpenInEditor?: (docId: string, title: string, content: string | Record<string, unknown>) => void;
+  /** Called with the document converted to Markdown, the format Pages stores. */
+  onOpenInEditor?: (markdown: string) => void;
 }
 
 /** Page styles for the sandboxed reader. The iframe renders on white like a printed page, in light and dark. */
@@ -106,7 +107,7 @@ export const DriveImportPage: React.FC<DriveImportPageProps> = ({
               </Button>
               <Button
                 variant="contained"
-                onClick={() => onOpenInEditor?.(importedDocument.docId, importedDocument.title, importedDocument.markdown)}
+                onClick={() => onOpenInEditor?.(importedDocument.markdown)}
               >
                 Open in editor
               </Button>
