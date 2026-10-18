@@ -5,7 +5,7 @@
  */
 
 import JSZip from "jszip";
-import { DriveImportError, type TipTapDocNode, type TipTapNode } from "../types";
+import { DriveImportError } from "../types";
 
 const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -180,7 +180,7 @@ async function readNumberingFormats(zip: JSZip): Promise<Map<string, boolean>> {
 
 export async function convertDocxToDocument(
   docxBytes: Uint8Array,
-): Promise<{ htmlContent: string; tiptapJson: TipTapDocNode; rawText: string }> {
+): Promise<{ htmlContent: string; rawText: string }> {
   if (!docxBytes || docxBytes.length === 0) throw corrupted("DOCX file is empty (0 bytes)");
 
   let zip: JSZip;
@@ -202,9 +202,5 @@ export async function convertDocxToDocument(
   const htmlContent = renderBlocks(body, numFormats, textParts) || "<p></p>";
   const rawText = textParts.join("\n\n");
 
-  const content: TipTapNode[] = textParts.length
-    ? textParts.map((t) => ({ type: "paragraph", content: [{ type: "text", text: t }] }))
-    : [{ type: "paragraph", content: [] }];
-
-  return { htmlContent, tiptapJson: { type: "doc", content }, rawText };
+  return { htmlContent, rawText };
 }

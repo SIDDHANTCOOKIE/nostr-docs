@@ -89,7 +89,6 @@ Attendees: Alice, Bob, Charlie
     expect(docResult.htmlContent).toContain("<h1>Q4 Strategy Meeting</h1>");
     expect(docResult.htmlContent).toContain("<h2>Action Items</h2>");
     expect(docResult.htmlContent).toContain("<blockquote>");
-    expect(docResult.tiptapJson.type).toBe("doc");
     expect(docResult.wordCount).toBeGreaterThan(15);
   });
 
@@ -136,7 +135,6 @@ Attendees: Alice, Bob, Charlie
     expect(docResult.title).toBe("Legacy_Spec");
     expect(docResult.format).toBe("text");
     expect(docResult.rawText).toBe(fullText);
-    expect(docResult.tiptapJson.content.length).toBeGreaterThanOrEqual(2);
   });
 
   // Scenario 3: Large multi-chunk protected PDF blob requested from Blossom -> Attaches Kind 24242 auth, verifies hash, renders PDF viewer

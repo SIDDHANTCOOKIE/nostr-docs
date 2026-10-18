@@ -1,25 +1,26 @@
 /**
  * src/features/driveImport/converters/documentConverter.ts
- * Universal Document Converter for TipTap ProseMirror Collaborative Editor.
- *
- * Converts Markdown, HTML, Plain Text, and DOCX binary payloads into:
- * 1. Clean sanitized HTML content string.
- * 2. Structured TipTap ProseMirror document JSON (`TipTapDocNode`).
- * 3. Title sanitization, word counts, and unique collaborative document descriptors.
+ * Converts a decrypted Drive file (Markdown, HTML, plain text or DOCX) into what the
+ * import screen needs: HTML for the reader, plain text for the word count, and the
+ * Markdown that Pages stores when the user opens it in the editor.
  */
 
+import MarkdownIt from "markdown-it";
 import {
   DriveImportError,
   type DecryptedDriveFile,
   type DocumentImportResult,
-  type TipTapDocNode,
-  type TipTapNode,
 } from "../types";
 import { classifyDriveFile } from "./mimeClassifier";
 import { convertDocxToDocument } from "./docxConverter";
+import { htmlToMarkdown } from "./htmlToMarkdown";
 
 export { convertDocxToDocument };
-import { htmlToMarkdown } from "./htmlToMarkdown";
+
+type Converted = { htmlContent: string; rawText: string };
+
+/** html: false turns raw HTML inside a Markdown file into text instead of markup. */
+const markdown = new MarkdownIt({ html: false, linkify: false });
 
 /**
  * Strips path components and document file extensions to derive a clean display title.
@@ -46,9 +47,7 @@ export function sanitizeDocumentTitle(fileName?: string): string {
   return cleaned.length > 0 ? cleaned : "Untitled Document (Imported)";
 }
 
-/**
- * Escapes unsafe HTML characters to prevent XSS injection.
- */
+/** Escapes unsafe HTML characters. */
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -58,383 +57,46 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#039;");
 }
 
-/**
- * Parses inline markdown marks (bold, italic, strikethrough, inline code, links)
- * into HTML and TipTap inline nodes.
- */
-function parseInlineMarkdown(text: string): { html: string; nodes: TipTapNode[] } {
-  const nodes: TipTapNode[] = [];
-  let html = "";
-
-  // Regular expression matching bold (** or __), italic (* or _), strikethrough (~~), code (`), or links [text](url)
-  const tokenRegex = /(\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*(.+?)\*|_(.+?)_|`(.+?)`|\[(.+?)\]\((.+?)\))/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = tokenRegex.exec(text)) !== null) {
-    // Push preceding text if any
-    if (match.index > lastIndex) {
-      const plainSegment = text.slice(lastIndex, match.index);
-      html += escapeHtml(plainSegment);
-      nodes.push({ type: "text", text: plainSegment });
-    }
-
-    if (match[2] || match[3]) {
-      // Bold: **text** or __text__
-      const boldText = match[2] || match[3];
-      html += `<strong>${escapeHtml(boldText)}</strong>`;
-      nodes.push({
-        type: "text",
-        text: boldText,
-        marks: [{ type: "bold" }],
-      });
-    } else if (match[4]) {
-      // Strikethrough: ~~text~~
-      const strikeText = match[4];
-      html += `<s>${escapeHtml(strikeText)}</s>`;
-      nodes.push({
-        type: "text",
-        text: strikeText,
-        marks: [{ type: "strike" }],
-      });
-    } else if (match[5] || match[6]) {
-      // Italic: *text* or _text_
-      const italicText = match[5] || match[6];
-      html += `<em>${escapeHtml(italicText)}</em>`;
-      nodes.push({
-        type: "text",
-        text: italicText,
-        marks: [{ type: "italic" }],
-      });
-    } else if (match[7]) {
-      // Inline code: `code`
-      const codeText = match[7];
-      html += `<code>${escapeHtml(codeText)}</code>`;
-      nodes.push({
-        type: "text",
-        text: codeText,
-        marks: [{ type: "code" }],
-      });
-    } else if (match[8] && match[9]) {
-      // Link: [text](href)
-      const linkText = match[8];
-      const linkHref = match[9];
-      html += `<a href="${escapeHtml(linkHref)}">${escapeHtml(linkText)}</a>`;
-      nodes.push({
-        type: "text",
-        text: linkText,
-        marks: [{ type: "link", attrs: { href: linkHref } }],
-      });
-    }
-
-    lastIndex = tokenRegex.lastIndex;
-  }
-
-  // Push remaining trailing text
-  if (lastIndex < text.length) {
-    const trailingSegment = text.slice(lastIndex);
-    html += escapeHtml(trailingSegment);
-    nodes.push({ type: "text", text: trailingSegment });
-  }
-
-  return { html, nodes };
+export function convertMarkdownToDocument(markdownText: string): Converted {
+  const rawText = markdownText || "";
+  return { htmlContent: markdown.render(rawText).trim() || "<p></p>", rawText };
 }
 
-/**
- * Converts Markdown string into clean HTML and TipTap ProseMirror document JSON.
- */
-export function convertMarkdownToDocument(markdownText: string, _title?: string): {
-  htmlContent: string;
-  tiptapJson: TipTapDocNode;
-  rawText: string;
-} {
-  const normText = (markdownText || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const lines = normText.split("\n");
-
-  const docContent: TipTapNode[] = [];
-  const htmlParts: string[] = [];
-
-  let inCodeBlock = false;
-  let codeBlockLang = "";
-  let codeBlockLines: string[] = [];
-
-  let inList: "bullet" | "ordered" | null = null;
-  let listItems: TipTapNode[] = [];
-  let listHtmlParts: string[] = [];
-
-  function flushList() {
-    if (!inList) return;
-    if (inList === "bullet") {
-      docContent.push({ type: "bulletList", content: listItems });
-      htmlParts.push(`<ul>${listHtmlParts.join("")}</ul>`);
-    } else {
-      docContent.push({ type: "orderedList", content: listItems });
-      htmlParts.push(`<ol>${listHtmlParts.join("")}</ol>`);
-    }
-    inList = null;
-    listItems = [];
-    listHtmlParts = [];
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    // 1. Code Blocks (```)
-    if (trimmed.startsWith("```")) {
-      if (inCodeBlock) {
-        // End code block
-        const codeContent = codeBlockLines.join("\n");
-        docContent.push({
-          type: "codeBlock",
-          attrs: { language: codeBlockLang || null },
-          content: codeContent ? [{ type: "text", text: codeContent }] : [],
-        });
-        htmlParts.push(
-          `<pre><code class="language-${escapeHtml(codeBlockLang)}">${escapeHtml(codeContent)}</code></pre>`,
-        );
-        inCodeBlock = false;
-        codeBlockLines = [];
-        codeBlockLang = "";
-      } else {
-        // Start code block
-        flushList();
-        inCodeBlock = true;
-        codeBlockLang = trimmed.slice(3).trim();
-        codeBlockLines = [];
-      }
-      continue;
-    }
-
-    if (inCodeBlock) {
-      codeBlockLines.push(line);
-      continue;
-    }
-
-    // 2. Empty Lines
-    if (trimmed === "") {
-      flushList();
-      continue;
-    }
-
-    // 3. Headings (# H1 to ###### H6)
-    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
-    if (headingMatch) {
-      flushList();
-      const level = headingMatch[1].length;
-      const headingText = headingMatch[2].trim();
-      const inline = parseInlineMarkdown(headingText);
-
-      docContent.push({
-        type: "heading",
-        attrs: { level },
-        content: inline.nodes.length > 0 ? inline.nodes : [{ type: "text", text: headingText }],
-      });
-      htmlParts.push(`<h${level}>${inline.html}</h${level}>`);
-      continue;
-    }
-
-    // 4. Horizontal Rule (---, ***, ___)
-    if (/^(\*{3,}|-{3,}|_{3,})$/.test(trimmed)) {
-      flushList();
-      docContent.push({ type: "horizontalRule" });
-      htmlParts.push("<hr />");
-      continue;
-    }
-
-    // 5. Blockquote (> quote)
-    if (line.startsWith(">")) {
-      flushList();
-      const quoteText = line.replace(/^>\s?/, "").trim();
-      const inline = parseInlineMarkdown(quoteText);
-
-      docContent.push({
-        type: "blockquote",
-        content: [
-          {
-            type: "paragraph",
-            content: inline.nodes.length > 0 ? inline.nodes : [{ type: "text", text: quoteText }],
-          },
-        ],
-      });
-      htmlParts.push(`<blockquote><p>${inline.html}</p></blockquote>`);
-      continue;
-    }
-
-    // 6. Bullet Lists (* item, - item, + item)
-    const bulletMatch = line.match(/^(\*|-|\+)\s+(.*)$/);
-    if (bulletMatch) {
-      if (inList !== "bullet") {
-        flushList();
-        inList = "bullet";
-      }
-      const itemText = bulletMatch[2].trim();
-      const inline = parseInlineMarkdown(itemText);
-      listItems.push({
-        type: "listItem",
-        content: [
-          {
-            type: "paragraph",
-            content: inline.nodes.length > 0 ? inline.nodes : [{ type: "text", text: itemText }],
-          },
-        ],
-      });
-      listHtmlParts.push(`<li>${inline.html}</li>`);
-      continue;
-    }
-
-    // 7. Ordered Lists (1. item)
-    const orderedMatch = line.match(/^(\d+)\.\s+(.*)$/);
-    if (orderedMatch) {
-      if (inList !== "ordered") {
-        flushList();
-        inList = "ordered";
-      }
-      const itemText = orderedMatch[2].trim();
-      const inline = parseInlineMarkdown(itemText);
-      listItems.push({
-        type: "listItem",
-        content: [
-          {
-            type: "paragraph",
-            content: inline.nodes.length > 0 ? inline.nodes : [{ type: "text", text: itemText }],
-          },
-        ],
-      });
-      listHtmlParts.push(`<li>${inline.html}</li>`);
-      continue;
-    }
-
-    // 8. Standard Paragraph
-    flushList();
-    const inline = parseInlineMarkdown(line);
-    docContent.push({
-      type: "paragraph",
-      content: inline.nodes.length > 0 ? inline.nodes : [{ type: "text", text: line }],
-    });
-    htmlParts.push(`<p>${inline.html}</p>`);
-  }
-
-  flushList();
-
-  // Handle unclosed code block at end of file
-  if (inCodeBlock) {
-    const codeContent = codeBlockLines.join("\n");
-    docContent.push({
-      type: "codeBlock",
-      attrs: { language: codeBlockLang || null },
-      content: codeContent ? [{ type: "text", text: codeContent }] : [],
-    });
-    htmlParts.push(
-      `<pre><code class="language-${escapeHtml(codeBlockLang)}">${escapeHtml(codeContent)}</code></pre>`,
-    );
-  }
-
-  // Ensure document is never empty
-  if (docContent.length === 0) {
-    docContent.push({ type: "paragraph", content: [] });
-    htmlParts.push("<p></p>");
-  }
-
-  return {
-    htmlContent: htmlParts.join(""),
-    tiptapJson: { type: "doc", content: docContent },
-    rawText: normText,
-  };
+/** Paragraphs are separated by blank lines; single newlines inside one become line breaks. */
+export function convertPlainTextToDocument(plainText: string): Converted {
+  const rawText = (plainText || "").replace(/\r\n?/g, "\n");
+  const paragraphs = rawText
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph) => `<p>${paragraph.split("\n").map(escapeHtml).join("<br />")}</p>`);
+  return { htmlContent: paragraphs.join("") || "<p></p>", rawText };
 }
 
-/**
- * Converts Plain Text into HTML paragraphs and TipTap document model.
- */
-export function convertPlainTextToDocument(plainText: string, _title?: string): {
-  htmlContent: string;
-  tiptapJson: TipTapDocNode;
-  rawText: string;
-} {
-  const normText = (plainText || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const paragraphs = normText.split(/\n\s*\n/);
-
-  const docContent: TipTapNode[] = [];
-  const htmlParts: string[] = [];
-
-  for (const para of paragraphs) {
-    const cleanPara = para.trim();
-    if (!cleanPara) continue;
-
-    // Handle single newlines inside paragraph with line breaks
-    const lines = cleanPara.split("\n");
-    const pNodes: TipTapNode[] = [];
-    const pSubHtml: string[] = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      if (i > 0) {
-        pNodes.push({ type: "hardBreak" });
-        pSubHtml.push("<br />");
-      }
-      pNodes.push({ type: "text", text: lines[i] });
-      pSubHtml.push(escapeHtml(lines[i]));
-    }
-
-    docContent.push({
-      type: "paragraph",
-      content: pNodes,
-    });
-    htmlParts.push(`<p>${pSubHtml.join("")}</p>`);
-  }
-
-  if (docContent.length === 0) {
-    docContent.push({ type: "paragraph", content: [] });
-    htmlParts.push("<p></p>");
-  }
-
-  return {
-    htmlContent: htmlParts.join(""),
-    tiptapJson: { type: "doc", content: docContent },
-    rawText: normText,
-  };
-}
-
-/**
- * Converts HTML string into sanitized TipTap document model and clean HTML.
- */
-export function convertHtmlToDocument(htmlText: string, _title?: string): {
-  htmlContent: string;
-  tiptapJson: TipTapDocNode;
-  rawText: string;
-} {
-  // Strip malicious tags: scripts, objects, iframes, styles, links
+/** Removes scripts, styles, frames and event handlers; the reader also renders in a sandboxed iframe. */
+export function convertHtmlToDocument(htmlText: string): Converted {
   const sanitized = htmlText
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
     .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
-    .replace(/\son\w+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi, "") // strip onerror, onclick, etc.
+    .replace(/\son\w+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi, "")
     .replace(/javascript:/gi, "");
 
-  // Extract text and build structured paragraphs
-  // Split on block-level tags: <p>, <div>, <h1>-<h6>, <br>, <li>
-  const blocks = sanitized
+  // Word count and plain text: break at block boundaries, then drop the tags.
+  const rawText = sanitized
     .replace(/<\/h[1-6]>/gi, "\n\n")
     .replace(/<\/p>/gi, "\n\n")
     .replace(/<\/div>/gi, "\n\n")
     .replace(/<\/li>/gi, "\n")
-    .replace(/<br\s*\/?>/gi, "\n");
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
-  const cleanText = blocks.replace(/<[^>]*>/g, "").replace(/\n{3,}/g, "\n\n").trim();
-
-  // Reuse plain text structured conversion for solid ProseMirror compatibility
-  const converted = convertPlainTextToDocument(cleanText);
-
-  return {
-    htmlContent: sanitized.trim() || "<p></p>",
-    tiptapJson: converted.tiptapJson,
-    rawText: cleanText,
-  };
+  return { htmlContent: sanitized.trim() || "<p></p>", rawText };
 }
 
-/**
- * Universal entrance point: converts a DecryptedDriveFile into a complete DocumentImportResult
- * ready for TipTap editor opening and collaborative document synchronization.
- */
+/** Converts a decrypted Drive file into the document the import screen shows and the editor saves. */
 export async function convertDriveFileToDocument(
   file: DecryptedDriveFile | { data: Uint8Array; name: string; mimeType: string },
 ): Promise<DocumentImportResult> {
@@ -452,62 +114,44 @@ export async function convertDriveFileToDocument(
 
   const title = sanitizeDocumentTitle(file.name);
   const docId = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-
-  let converted: {
-    htmlContent: string;
-    tiptapJson: TipTapDocNode;
-    rawText: string;
-  };
-
   const subtype = classification.documentSubtype || "text";
+  const decode = () => new TextDecoder("utf-8").decode(file.data);
 
+  let converted: Converted;
   switch (subtype) {
     case "docx":
       converted = await convertDocxToDocument(file.data);
       break;
-    case "markdown": {
-      const text = new TextDecoder("utf-8").decode(file.data);
-      converted = convertMarkdownToDocument(text, title);
+    case "markdown":
+      converted = convertMarkdownToDocument(decode());
       break;
-    }
-    case "html": {
-      const text = new TextDecoder("utf-8").decode(file.data);
-      converted = convertHtmlToDocument(text, title);
+    case "html":
+      converted = convertHtmlToDocument(decode());
       break;
-    }
-    case "text":
-    default: {
-      const text = new TextDecoder("utf-8").decode(file.data);
-      converted = convertPlainTextToDocument(text, title);
-      break;
-    }
+    default:
+      converted = convertPlainTextToDocument(decode());
   }
 
-  const words = converted.rawText.trim() ? converted.rawText.trim().split(/\s+/).length : 0;
-  const chars = converted.rawText.length;
-
+  // Pages stores Markdown. HTML and docx are converted from their HTML (needs a DOM; plain text elsewhere).
   const bodyMarkdown =
     (subtype === "docx" || subtype === "html") && typeof DOMParser !== "undefined"
       ? htmlToMarkdown(converted.htmlContent)
       : converted.rawText;
-  const markdown = /^#{1,6}\s/.test(bodyMarkdown)
-    ? bodyMarkdown
-    : `# ${title}
+  // The title is the first line of a page, so a file that does not open with a heading gets its name.
+  const pageMarkdown = /^#{1,6}\s/.test(bodyMarkdown) ? bodyMarkdown : `# ${title}\n\n${bodyMarkdown}`;
 
-${bodyMarkdown}`;
-
+  const trimmed = converted.rawText.trim();
   return {
     docId,
     title,
-    markdown,
+    markdown: pageMarkdown,
     format: subtype === "markdown" ? "markdown" : subtype === "html" ? "html" : "text",
     htmlContent: converted.htmlContent,
-    tiptapJson: converted.tiptapJson,
     rawText: converted.rawText,
     sourceFileName: file.name,
     sourceMimeType: classification.normalizedMimeType,
-    characterCount: chars,
-    wordCount: words,
+    characterCount: converted.rawText.length,
+    wordCount: trimmed ? trimmed.split(/\s+/).length : 0,
     createdAt: Date.now(),
   };
 }

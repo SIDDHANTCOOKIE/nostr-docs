@@ -193,7 +193,7 @@ export type FileTypeCategory =
   | "generic-binary";
 
 /**
- * Specific document subtypes for TipTap collaborative import conversion.
+ * Document subtypes the importer can convert.
  */
 export type DocumentSubtype = "markdown" | "text" | "html" | "docx" | "unknown";
 
@@ -222,26 +222,7 @@ export interface FileClassification {
 }
 
 /**
- * ProseMirror / TipTap node model representation.
- */
-export interface TipTapNode {
-  type: string;
-  attrs?: Record<string, unknown>;
-  content?: TipTapNode[];
-  marks?: Array<{ type: string; attrs?: Record<string, unknown> }>;
-  text?: string;
-}
-
-/**
- * Canonical TipTap top-level document model.
- */
-export interface TipTapDocNode {
-  type: "doc";
-  content: TipTapNode[];
-}
-
-/**
- * Result returned by document importer ready for TipTap editor instantiation.
+ * Result of converting a Drive document: what the reader shows and what the editor saves.
  */
 export interface DocumentImportResult {
   /** Unique collaborative document identifier */
@@ -249,13 +230,11 @@ export interface DocumentImportResult {
   /** Sanitized display title extracted from file name */
   title: string;
   /** Primary format representation */
-  format: "markdown" | "html" | "text" | "tiptap-json";
-  /** Sanitized HTML content string ready for editor.commands.setContent() */
+  format: "markdown" | "html" | "text";
+  /** Sanitized HTML for the reader */
   htmlContent: string;
   /** Markdown the Pages editor stores documents as (title heading first) */
   markdown: string;
-  /** TipTap / ProseMirror JSON document tree */
-  tiptapJson: TipTapDocNode;
   /** Normalized raw text content */
   rawText: string;
   /** Original file name */

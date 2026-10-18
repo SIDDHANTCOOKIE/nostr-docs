@@ -34,7 +34,7 @@ import {
   type DecryptedDriveFile,
 } from "../../src/features/driveImport/types";
 
-describe("Milestone 3: Collaborative Document Importer & TipTap Integration", () => {
+describe("Milestone 3: Document Importer", () => {
   // =========================================================================
   // GROUP 1: MIME Type & File Extension Classification
   // =========================================================================
@@ -159,21 +159,13 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
   // GROUP 3: Markdown to TipTap Document Conversion
   // =========================================================================
   describe("3. Markdown Converter", () => {
-    it("3.1 converts Headings (H1 to H3) into TipTap heading nodes and HTML", () => {
+    it("3.1 converts headings (H1 to H3)", () => {
       const md = "# Title H1\n\n## Section H2\n\n### Sub-section H3";
       const result = convertMarkdownToDocument(md);
 
       expect(result.htmlContent).toContain("<h1>Title H1</h1>");
       expect(result.htmlContent).toContain("<h2>Section H2</h2>");
       expect(result.htmlContent).toContain("<h3>Sub-section H3</h3>");
-
-      const nodes = result.tiptapJson.content;
-      expect(nodes[0].type).toBe("heading");
-      expect(nodes[0].attrs?.level).toBe(1);
-      expect(nodes[1].type).toBe("heading");
-      expect(nodes[1].attrs?.level).toBe(2);
-      expect(nodes[2].type).toBe("heading");
-      expect(nodes[2].attrs?.level).toBe(3);
     });
 
     it("3.2 converts inline bold, italic, code, strikethrough, and links", () => {
@@ -185,16 +177,6 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
       expect(result.htmlContent).toContain("<s>struck</s>");
       expect(result.htmlContent).toContain("<code>code</code>");
       expect(result.htmlContent).toContain('<a href="https://formstr.app">link</a>');
-
-      const pNode = result.tiptapJson.content[0];
-      expect(pNode.type).toBe("paragraph");
-      expect(pNode.content).toBeDefined();
-
-      const boldText = pNode.content?.find((c) => c.text === "bold");
-      expect(boldText?.marks?.[0].type).toBe("bold");
-
-      const codeText = pNode.content?.find((c) => c.text === "code");
-      expect(codeText?.marks?.[0].type).toBe("code");
     });
 
     it("3.3 converts fenced code blocks with language annotations", () => {
@@ -203,37 +185,32 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
 
       expect(result.htmlContent).toContain('<pre><code class="language-typescript">');
       expect(result.htmlContent).toContain("const x: number = 42;");
-
-      const node = result.tiptapJson.content[0];
-      expect(node.type).toBe("codeBlock");
-      expect(node.attrs?.language).toBe("typescript");
     });
 
     it("3.4 converts unordered and ordered lists", () => {
       const md = "* Bullet Item 1\n* Bullet Item 2\n\n1. First step\n2. Second step";
       const result = convertMarkdownToDocument(md);
 
-      expect(result.htmlContent).toContain("<ul><li>Bullet Item 1</li><li>Bullet Item 2</li></ul>");
-      expect(result.htmlContent).toContain("<ol><li>First step</li><li>Second step</li></ol>");
-
-      const ulNode = result.tiptapJson.content[0];
-      expect(ulNode.type).toBe("bulletList");
-      expect(ulNode.content?.length).toBe(2);
-
-      const olNode = result.tiptapJson.content[1];
-      expect(olNode.type).toBe("orderedList");
-      expect(olNode.content?.length).toBe(2);
+      expect(result.htmlContent).toContain("<ul>");
+      expect(result.htmlContent).toContain("<li>Bullet Item 2</li>");
+      expect(result.htmlContent).toContain("<ol>");
+      expect(result.htmlContent).toContain("<li>First step</li>");
     });
 
     it("3.5 converts blockquotes and horizontal rules", () => {
       const md = "> This is a quote\n\n---\n\nParagraph text";
       const result = convertMarkdownToDocument(md);
 
-      expect(result.htmlContent).toContain("<blockquote><p>This is a quote</p></blockquote>");
-      expect(result.htmlContent).toContain("<hr />");
+      expect(result.htmlContent).toContain("<blockquote>");
+      expect(result.htmlContent).toContain("<p>This is a quote</p>");
+      expect(result.htmlContent).toContain("<hr>");
+    });
 
-      expect(result.tiptapJson.content[0].type).toBe("blockquote");
-      expect(result.tiptapJson.content[1].type).toBe("horizontalRule");
+    it("3.7 shows raw HTML inside Markdown as text, not markup", () => {
+      const result = convertMarkdownToDocument("Hello <script>alert(1)</script> world");
+
+      expect(result.htmlContent).not.toContain("<script>");
+      expect(result.htmlContent).toContain("&lt;script&gt;");
     });
 
     it("3.6 normalizes Windows CRLF (\\r\\n) newlines cleanly", () => {
@@ -255,9 +232,6 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
       const result = convertPlainTextToDocument(text);
 
       expect(result.htmlContent).toBe("<p>First paragraph content.</p><p>Second paragraph content.</p>");
-      expect(result.tiptapJson.content.length).toBe(2);
-      expect(result.tiptapJson.content[0].type).toBe("paragraph");
-      expect(result.tiptapJson.content[1].type).toBe("paragraph");
     });
 
     it("4.2 escapes HTML special characters to prevent XSS injection", () => {
@@ -274,8 +248,6 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
       const result = convertPlainTextToDocument(multiLine);
 
       expect(result.htmlContent).toBe("<p>Line one<br />Line two</p>");
-      const pNode = result.tiptapJson.content[0];
-      expect(pNode.content?.some((c) => c.type === "hardBreak")).toBe(true);
     });
   });
 
@@ -295,13 +267,12 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
       expect(result.htmlContent).toContain("<p>Body</p>");
     });
 
-    it("5.2 extracts clean text and builds structured TipTap document", () => {
+    it("5.2 extracts clean text for the word count", () => {
       const html = "<h2>Subtitle</h2><p>Description text here.</p>";
       const result = convertHtmlToDocument(html);
 
       expect(result.rawText).toContain("Subtitle");
       expect(result.rawText).toContain("Description text here.");
-      expect(result.tiptapJson.type).toBe("doc");
     });
   });
 
@@ -332,7 +303,6 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
       expect(result.htmlContent).toContain("<li>");
       expect(result.htmlContent).toContain("<table>");
       expect(result.htmlContent).toContain("Cell B");
-      expect(result.tiptapJson.type).toBe("doc");
     });
   });
 
@@ -366,7 +336,6 @@ describe("Milestone 3: Collaborative Document Importer & TipTap Integration", ()
       expect(result.wordCount).toBe(11);
       expect(result.characterCount).toBe(mdContent.length);
       expect(result.htmlContent).toContain("<h1>Project Plan</h1>");
-      expect(result.tiptapJson.type).toBe("doc");
     });
 
     it("7.2 rejects non-document formats (e.g. image/png) with UNSUPPORTED_DOCUMENT_FORMAT", async () => {
